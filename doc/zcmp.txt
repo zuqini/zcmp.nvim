@@ -13,12 +13,15 @@ CONTENTS                                                        *zcmp-contents*
   4. Configuration ............................. |zcmp-configuration|
   5. Sources ................................... |zcmp-sources|
   6. Providers ................................. |zcmp-providers|
-  7. Keymaps ................................... |zcmp-keymaps|
-  8. Commands .................................. |zcmp-commands|
-  9. API ....................................... |zcmp-api|
- 10. User commands ............................. |zcmp-usercommands|
- 11. Health .................................... |zcmp-health|
- 12. Coming from blink.cmp ..................... |zcmp-blink|
+  7. LSP ....................................... |zcmp-lsp|
+  8. Snippets .................................. |zcmp-snippets|
+  9. Keymaps ................................... |zcmp-keymaps|
+ 10. Appearance ................................ |zcmp-appearance|
+ 11. Commands .................................. |zcmp-commands|
+ 12. API ....................................... |zcmp-api|
+ 13. User commands ............................. |zcmp-usercommands|
+ 14. Health .................................... |zcmp-health|
+ 15. Coming from blink.cmp ..................... |zcmp-blink|
 
 ==============================================================================
 1. INTRODUCTION                                             *zcmp-introduction*
@@ -39,16 +42,23 @@ its own, no menu drawing, no scoring, no binary to build. What it adds:
   in the line and leaves the listing to |getcompletion()| -- the trailing
   '/', hidden dotfiles and '~/' expansion included. A relative token
   resolves against the buffer's directory, not the cwd.
-- Snippets through zsnip.nvim's own 'complete' source, expanded by
-  |vim.snippet|.
-- Both LSP delivery paths at once, because each covers what the other
-  misses: the 'o' flag merges server items into the ranked menu but asks
-  once per completion cycle, while |vim.lsp.completion| autotrigger re-asks
-  per trigger character and answers nothing for a plain keyword. ZCmp widens
-  the server's trigger characters to every letter, which is what makes the
-  second fire at all.
+- The LSP wired the way core wants it: both delivery paths at once, the
+  trigger characters widened so the second one fires, the omnifunc kept out
+  of 'complete' until a server is attached, and -- because switching
+  |vim.lsp.completion| on is what buys them -- auto-imports, snippet
+  expansion and resolved documentation on accept. See |zcmp-lsp|.
+- Snippet sessions driven through two functions defaulting to |vim.snippet|,
+  so a server's snippet items and any snippet plugin on |vim.snippet| are
+  integrated with no adapter, and candidates in the menu from a snippet
+  source of your choosing. See |zcmp-snippets|.
 - Keymaps that give themselves back: every mapping is buffer-local, and
   every `fallback` runs whatever the key was mapped to before ZCmp attached.
+- A kind column coloured apart from the label, re-derived after a
+  |:colorscheme|. See |zcmp-appearance|.
+- |:ZCmp| status and `:checkhealth zcmp`, which answer the questions a menu
+  that came back empty raises. See |zcmp-health|.
+- |zcmp.disable()|, which gives every one of the above back exactly as it
+  was found.
 
 What it deliberately does not do: command-line completion (that is
 'wildoptions', a different mechanism), a signature window that follows the
@@ -58,7 +68,8 @@ cursor, ghost text, per-source scoring, or drawing anything.
 2. REQUIREMENTS                                             *zcmp-requirements*
 
 - Neovim 0.12.0 or newer
-- Optional: zsnip.nvim, for the `snippets` source
+- Optional: zsnip.nvim, which the `snippets` provider points at by default.
+  Nothing else requires it; see |zcmp-snippets|.
 
 ==============================================================================
 3. QUICK START                                               *zcmp-quickstart*
@@ -244,7 +255,135 @@ accept. |complete()| takes one start column for the entire menu, which is the
 constraint this plugin exists to be free of.
 
 ==============================================================================
-7. KEYMAPS                                                       *zcmp-keymaps*
+7. LSP                                                               *zcmp-lsp*
+
+The `lsp` source is two things at once, because each covers what the other
+misses:
+
+- the `o` flag in 'complete' -- the omnifunc -- which merges server items
+  into the same ranked menu as everything else, but asks once per completion
+  cycle, so typing on through `vim.` narrows nothing;
+- |vim.lsp.completion|'s autotrigger, which re-asks per trigger character but
+  answers nothing for a plain keyword.
+
+ZCmp widens the server's declared `triggerCharacters` to every letter, which
+is what makes the second one fire at all, and puts the declared list back
+when the last buffer using that client lets go of it.
+
+Switching |vim.lsp.completion| on is also what buys the parts of LSP
+completion that are not a list of words. On accept, core expands a snippet
+item through |vim.snippet|, applies the item's `additionalTextEdits` -- the
+import statement at the top of the file -- and runs any command it carries.
+On selection it asks `completionItem/resolve` and fills the documentation
+popup with the answer. None of that happens in a buffer nobody enabled it on,
+and enabling it is not the default.
+
+The omnifunc joins 'complete' only once a client answering
+`textDocument/completion` is attached, and leaves when the last one detaches.
+That is the provider's `available`, and it is why 'complete' in a buffer with
+no server has no dead `o` in it.
+
+>lua
+    sources = {
+      providers = {
+        lsp = {
+          opts = {
+            autotrigger = true,               -- vim.lsp.completion's trigger
+            extend_trigger_characters = true, -- widen it to every letter
+          },
+        },
+      },
+    }
+<
+Turn `extend_trigger_characters` off for a server that misbehaves under a
+widened list; autotrigger then only fires on the characters it asked for.
+
+|zcmp.get_lsp_capabilities()| exists so a blink.cmp config moves over
+unedited. ZCmp completes through core, so it is
+|vim.lsp.protocol.make_client_capabilities()| with the override merged in --
+a config that never calls it loses nothing.
+
+One default that is doing more than it looks:
+`completion.list.selection.auto_insert = false` writes `noinsert` into
+'completeopt', which 'autocomplete' ignores but |vim.lsp.completion|'s own
+|complete()| call honours. Without it the server's first item is inserted as
+you type, `vim.` becomes `vim.F`, and the next keystroke appends to that.
+
+==============================================================================
+8. SNIPPETS                                                     *zcmp-snippets*
+
+ZCmp does not expand snippets and does not need to: whatever puts the snippet
+in the buffer expands it. What ZCmp drives is the session -- jumping tabstops
+and clearing a placeholder -- through two functions, which default to core's:
+
+>lua
+    snippets = {
+      active = function(filter) return vim.snippet.active(filter) end,
+      jump = function(direction) vim.snippet.jump(direction) end,
+    }
+<
+So anything that expands through |vim.snippet| is already integrated, with no
+adapter and nothing to configure:
+
+- A language server's snippet items. |vim.lsp.completion| expands them with
+  |vim.snippet.expand()| on accept -- core's doing, and it happens because
+  ZCmp switched |vim.lsp.completion| on. Accept a function from your language
+  server and <Tab> walks its arguments.
+- Any snippet plugin that expands with |vim.snippet|.
+
+An engine with a session of its own -- LuaSnip -- is those same two
+functions:
+
+>lua
+    snippets = {
+      active = function(filter)
+        local luasnip = require('luasnip')
+        if filter and filter.direction then
+          return luasnip.jumpable(filter.direction)
+        end
+        return luasnip.in_snippet()
+      end,
+      jump = function(direction) require('luasnip').jump(direction) end,
+    }
+<
+blink.cmp spells that `snippets.preset = 'luasnip'`. ZCmp has no presets
+here: `snippets.preset` and `snippets.expand` are accepted so a blink config
+moves over unedited, and |zcmp.setup()| says out loud that neither is called
+rather than ignoring them.
+
+The commands that drive all this are |zcmp.snippet_forward()|,
+|zcmp.snippet_backward()|, |zcmp.snippet_delete()| and
+|zcmp.is_snippet_active()|. A keymap entry naming one is mapped in Select
+mode as well as Insert.
+
+                                                        *zcmp-snippet-source*
+Expanding a snippet is one thing; offering snippets as completion candidates
+is another, and core has no source for it. That is what the `snippets`
+provider id is for, and it points at zsnip.nvim's 'complete' source by
+default:
+
+>lua
+    snippets = {
+      name = 'Snippets',
+      module = 'zsnip.complete',
+      -- zcmp owns 'complete'; zsnip caps and documents for itself.
+      opts = { complete = false, documentation = false, limit = 30 },
+    }
+<
+It is a default, not a dependency. The provider is a `module` like any other
+(see |zcmp-providers|), so any snippet plugin exposing `source()` or
+`completefunc()` takes its place under the same id, and dropping `snippets`
+from `sources.default` leaves the rest of the menu untouched. If the module
+is not installed the provider contributes nothing, every other source still
+resolves, and |:ZCmp| status names it.
+
+zsnip is the one ZCmp ships pointed at because it already speaks 'complete':
+being a function source, it picks its own start column, so a `<div` trigger
+replaces the whole run rather than the keyword at the end of it. See
+|zcmp-start-column|.
+
+==============================================================================
+9. KEYMAPS                                                       *zcmp-keymaps*
 
 Four presets:
 
@@ -291,12 +430,35 @@ autopair plugin still pairs -- ZCmp knows about none of them.
 `fallback` always answers, so it ends the list: a command written after it can
 never run, and ZCmp says so once with |vim.notify()|. Write it last.
 
+Every preset but `none` also brings <C-space>, <Up>/<Down>, <C-n>/<C-p>,
+<S-Tab> to jump a tabstop back, <C-b>/<C-f> for the documentation popup,
+<C-k> for signature help and <C-y> to accept.
+
 Mappings are installed per buffer, and removed again on |zcmp.disable()| --
 which also puts back whatever they displaced. A command list containing a
 snippet command is mapped in Select mode as well as Insert.
 
+A name that is not one of |zcmp-commands|, and a command written after
+`fallback`, are both reported with |vim.notify()|: a key that quietly does
+nothing reads as the plugin being broken.
+
 ==============================================================================
-8. COMMANDS                                                     *zcmp-commands*
+10. APPEARANCE                                                *zcmp-appearance*
+
+Core draws the menu, and most colourschemes leave |hl-PmenuKind| linked to
+|hl-Pmenu| -- so the kind column reads as part of the label. ZCmp sets
+`PmenuKind` and `PmenuKindSel` from `appearance.kind_hl` (`Special` by
+default), keeping the menu's own background and the selected row's, and
+re-derives both after a |:colorscheme| -- including the one a config sets
+after |zcmp.setup()| has run.
+
+`appearance.kind_hl = false` leaves the groups alone. |zcmp.disable()| puts
+back what was there, captured as a link where it was a link.
+
+'completeitemalign' is core's, and orders the three columns it has.
+
+==============================================================================
+11. COMMANDS                                                    *zcmp-commands*
 
 What a keymap entry names by string. Each is also a function on the module,
 and each answers whether it did anything.
@@ -349,15 +511,9 @@ zcmp.snippet_delete()   Delete the selected placeholder and keep typing in
 zcmp.is_snippet_active({filter})
                         As |vim.snippet.active()|.
 
-                                                              *zcmp-snippets*
 All four go through `config.snippets`, so another snippet engine is two
-functions away: `snippets.active` and `snippets.jump`.
-
-`snippets.expand` and `snippets.preset` are blink.cmp's names, accepted so a
-config moves over unedited and never called: whatever put the snippet in the
-buffer expanded it -- zsnip for a snippet source, |vim.lsp.completion| through
-|vim.snippet.expand()| for a server's. Setting either is reported by
-|zcmp.setup()| rather than quietly ignored.
+functions away: `snippets.active` and `snippets.jump`. See |zcmp-snippets|
+for what that integrates with, and what it does not need to.
 
 Documentation ~
                                             *zcmp.scroll_documentation_down()*
@@ -394,7 +550,7 @@ zcmp.show_signature()   |vim.lsp.buf.signature_help()|, if `signature.enabled`
 zcmp.hide_signature()   Close the floating preview.
 
 ==============================================================================
-9. API                                                               *zcmp-api*
+12. API                                                              *zcmp-api*
 
                                                                 *zcmp.enable()*
 zcmp.enable()           Take over completion: write the options, install the
@@ -446,7 +602,7 @@ zcmp.get_lsp_capabilities({override})
 zcmp.version            The plugin's version, as a string.
 
 ==============================================================================
-10. USER COMMANDS                                          *zcmp-usercommands*
+13. USER COMMANDS                                          *zcmp-usercommands*
 
                                                                         *:ZCmp*
 :ZCmp [status]          What is serving this buffer: each source and what it
@@ -457,17 +613,19 @@ zcmp.version            The plugin's version, as a string.
 :ZCmp reload            |zcmp.reload()|
 
 ==============================================================================
-11. HEALTH                                                        *zcmp-health*
+14. HEALTH                                                        *zcmp-health*
 
 `:checkhealth zcmp` answers the questions an empty menu raises: whether the
 engine is enabled and its options are still the ones it set, whether the
-buffer it was called from is one ZCmp drives, which sources answered for it and which could not
--- a provider whose module is not installed says so by name -- and whether
-another completion engine is loaded alongside, which is the failure that
-looks like every other failure.
+buffer it was called from is one ZCmp drives, which sources answered for it
+and which could not -- a provider whose module is not installed says so by
+name -- whether this Neovim is missing a 'completeopt' flag the config asked
+for, and whether another completion engine is loaded alongside, which is the
+failure that looks like every other failure. It ends with a minimal config
+and what to put in a bug report.
 
 ==============================================================================
-12. COMING FROM BLINK.CMP                                          *zcmp-blink*
+15. COMING FROM BLINK.CMP                                          *zcmp-blink*
 
 The public surface is deliberately blink.cmp's: the same keymap presets and
 per-key command lists, the same `sources.default`, `per_filetype` and

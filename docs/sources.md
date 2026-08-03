@@ -170,8 +170,19 @@ zsnip a `limit`.
 
 ## Snippets
 
-The `snippets` provider is [zsnip.nvim](https://github.com/zuqini/zsnip.nvim)'s
-own `'complete'` source, configured like this by default:
+Two separate things wear this name, and only one of them is a source.
+
+**Expanding and jumping** is not ZCmp's, and needs no provider: whatever puts
+the snippet in the buffer expands it, and `snippets.active` / `snippets.jump`
+drive the session afterwards. Both default to `vim.snippet`, so a language
+server's snippet items — which `vim.lsp.completion` expands through
+`vim.snippet.expand()` — work with nothing configured at all. See
+[the README](../README.md#snippets).
+
+**Offering snippets as candidates** is a source, and core has none. That is
+what the `snippets` provider id is for. It points at
+[zsnip.nvim](https://github.com/zuqini/zsnip.nvim)'s own `'complete'` source
+by default:
 
 ```lua
 snippets = {
@@ -196,6 +207,22 @@ Do not also call `require('zsnip.complete').enable()` or
 `require('zsnip').start_lsp_server()`: either one offers every snippet a
 second time. `:checkhealth zsnip` says so if you do.
 
+That is a default, not a dependency. The provider is a `module` like any
+other, so a snippet plugin exposing `source()` or `completefunc()` takes its
+place under the same id:
+
+```lua
+sources = { providers = { snippets = { module = 'my.snippet.source' } } },
+```
+
+and dropping `snippets` from `sources.default` leaves the rest of the menu
+untouched.
+
 If a provider's module is missing — zsnip not installed, say — the provider
 contributes nothing and every other source still resolves. `:ZCmp status` and
 `:checkhealth zcmp` name it.
+
+A snippet source is the clearest case for [where each source
+starts](#where-each-source-starts): as a `'complete'` function source it picks
+its own start column, so a `<div` trigger replaces the whole run rather than
+the keyword at the end of it.

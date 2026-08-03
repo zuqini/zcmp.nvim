@@ -123,6 +123,9 @@ see [the note in the README](../README.md#one-thing-worth-knowing-about-preselec
 
 All of them go through `config.snippets`, so an engine other than
 `vim.snippet` is two functions away: `snippets.active` and `snippets.jump`.
+Because the default is `vim.snippet`, a server's snippet items and any
+snippet plugin that expands through it are already integrated — see
+[the README](../README.md#snippets) for that, and for the LuaSnip shape.
 
 `snippets.expand` and `snippets.preset` are blink.cmp's names, accepted so a
 config moves over unedited and never called — whatever put the snippet in the

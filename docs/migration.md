@@ -26,7 +26,7 @@ require('zcmp').setup(opts)
 | `completion.list.max_items` | same (becomes each source's `^{count}`) |
 | `completion.list.selection.preselect` / `.auto_insert` | same (become `preselect` / `noinsert`) |
 | `snippets.active` / `snippets.jump` | same |
-| `snippets.preset` / `snippets.expand` | accepted, never called — whatever inserts the snippet expands it. `setup()` says so; see [api.md](api.md#snippets) |
+| `snippets.preset` / `snippets.expand` | accepted, never called — whatever inserts the snippet expands it. `setup()` says so; see [api.md](api.md#snippets) and below |
 | `signature.enabled` | same, but manual only — see below |
 | `get_lsp_capabilities(override)` | same |
 | `add_filetype_source(ft, ids)` | same |
@@ -59,6 +59,35 @@ behave differently and two are ZCmp's own:
 | `sources.providers.<id>.score_offset`, `.fallbacks`, `.transform_items`, `.should_show_items`, `.min_keyword_length` | Ranking happens inside core, across all sources at once, and there is no hook in it. `max_items` and `available` are what is left. |
 | `fuzzy.implementation`, `.sorts`, `.prebuilt_binaries` | There is no matcher here to configure or download; `fuzzy.enabled` toggles core's. |
 | `appearance.kind_icons`, `.nerd_font_variant` | Core draws the kind column from what a source put in `kind`. |
+
+## Snippets
+
+blink's `snippets.preset` is `'default'` or `'luasnip'`. ZCmp has no presets
+here — `preset` and `expand` are accepted so the config moves over unedited,
+and `setup()` reports that neither is called rather than dropping them
+quietly. The default engine is `vim.snippet`, which is what
+`vim.lsp.completion` expands a server's snippet items with, so
+`preset = 'default'` needs no translation at all.
+
+`preset = 'luasnip'` becomes the two functions it stood for:
+
+```lua
+snippets = {
+  active = function(filter)
+    local luasnip = require('luasnip')
+    if filter and filter.direction then
+      return luasnip.jumpable(filter.direction)
+    end
+    return luasnip.in_snippet()
+  end,
+  jump = function(direction) require('luasnip').jump(direction) end,
+},
+```
+
+`sources.default`'s `snippets` entry is a separate thing — the source that
+puts snippet candidates in the menu. blink's is built in; ZCmp's is a
+provider pointing at zsnip.nvim by default, and swappable for any module with
+a `source()` or `completefunc()`. See [sources.md](sources.md#snippets).
 
 ## Two behaviours to expect
 
