@@ -222,6 +222,33 @@ sources = { providers = { snippets = { module = 'my.snippet.source' } } },
 and dropping `snippets` from `sources.default` leaves the rest of the menu
 untouched.
 
+For the plugins people arrive with, the module is already written:
+
+- **LuaSnip** — `snippets.preset = 'luasnip'` points the provider at
+  `zcmp.sources.snippets.luasnip` by itself (and swaps the session functions;
+  see [the README](../README.md#snippets)). An accepted match expands by
+  reference through `luasnip.snip_expand()`. Regex-trigger and hidden
+  snippets are not offered, and each snippet's `show_condition` is honoured.
+  `opts`: `limit` (default 100), `documentation` (default true),
+  `show_condition` (default true).
+- **nvim-snippets** — one provider line:
+
+  ```lua
+  sources = {
+    providers = { snippets = { module = 'zcmp.sources.snippets.nvim_snippets' } },
+  },
+  ```
+
+  Bodies are LSP snippet text, expanded through `snippets.expand` —
+  `vim.snippet` by default, exactly what nvim-snippets expects. `opts`:
+  `limit` (default 100), `documentation` (default true).
+
+Both are built on `zcmp.sources.snippets`, which owns what every snippet
+source must get right: the start column, fuzzy-matching its own list
+(a `refresh = 'always'` source narrows for itself), and replacing the
+inserted trigger with the expansion on `CompleteDone`. An adapter for another
+snippet plugin is an enumeration loop away — read either shipped one.
+
 If a provider's module is missing — zsnip not installed, say — the provider
 contributes nothing and every other source still resolves. `:ZCmp status` and
 `:checkhealth zcmp` name it.

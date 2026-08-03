@@ -26,7 +26,8 @@ require('zcmp').setup(opts)
 | `completion.list.max_items` | same (becomes each source's `^{count}`) |
 | `completion.list.selection.preselect` / `.auto_insert` | same (become `preselect` / `noinsert`) |
 | `snippets.active` / `snippets.jump` | same |
-| `snippets.preset` / `snippets.expand` | accepted, never called — whatever inserts the snippet expands it. `setup()` says so; see [api.md](api.md#snippets) and below |
+| `snippets.preset` | same for `'default'` and `'luasnip'`; `'mini_snippets'` is reported, not silently the default — see below |
+| `snippets.expand` | same, for what ZCmp's snippet sources insert; a server's snippet items stay `vim.snippet`'s — see below |
 | `signature.enabled` | same, but manual only — see below |
 | `get_lsp_capabilities(override)` | same |
 | `add_filetype_source(ft, ids)` | same |
@@ -62,32 +63,28 @@ behave differently and two are ZCmp's own:
 
 ## Snippets
 
-blink's `snippets.preset` is `'default'` or `'luasnip'`. ZCmp has no presets
-here — `preset` and `expand` are accepted so the config moves over unedited,
-and `setup()` reports that neither is called rather than dropping them
-quietly. The default engine is `vim.snippet`, which is what
-`vim.lsp.completion` expands a server's snippet items with, so
-`preset = 'default'` needs no translation at all.
+`preset = 'default'` needs no translation: the engine is `vim.snippet`, which
+is what `vim.lsp.completion` expands a server's snippet items with anyway.
 
-`preset = 'luasnip'` becomes the two functions it stood for:
+`preset = 'luasnip'` moves over unedited too, and means what it means in
+blink: `expand`, `active` and `jump` default to LuaSnip's, and the `snippets`
+provider points at a LuaSnip source ZCmp ships. The one behavioural
+difference from blink: a language server's snippet items still expand through
+`vim.snippet` — `vim.lsp.completion` owns that accept, not ZCmp — so the
+preset's functions ask LuaSnip first and fall through to `vim.snippet`, and
+the snippet keymap commands walk either session.
 
-```lua
-snippets = {
-  active = function(filter)
-    local luasnip = require('luasnip')
-    if filter and filter.direction then
-      return luasnip.jumpable(filter.direction)
-    end
-    return luasnip.in_snippet()
-  end,
-  jump = function(direction) require('luasnip').jump(direction) end,
-},
-```
+`preset = 'mini_snippets'` has no ZCmp equivalent yet; `setup()` reports it
+rather than silently behaving like `'default'`. The substitution is
+`snippets.expand`, `snippets.active` and `snippets.jump` written out, plus a
+`snippets` provider module for the menu candidates.
 
 `sources.default`'s `snippets` entry is a separate thing — the source that
 puts snippet candidates in the menu. blink's is built in; ZCmp's is a
-provider pointing at zsnip.nvim by default, and swappable for any module with
-a `source()` or `completefunc()`. See [sources.md](sources.md#snippets).
+provider pointing at zsnip.nvim by default, swapped by the `'luasnip'` preset
+to ZCmp's own LuaSnip source, and swappable for any module with a `source()`
+or `completefunc()` — ZCmp ships one for nvim-snippets as well. See
+[sources.md](sources.md#snippets).
 
 ## Two behaviours to expect
 

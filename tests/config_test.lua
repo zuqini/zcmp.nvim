@@ -142,15 +142,6 @@ describe('config', function()
     assert.are.same({ 'path' }, per_filetype.markdown)
   end)
 
-  it('reports the defaults it accepts but never calls', function()
-    local notified = helpers.notifications(function()
-      config.setup({ snippets = { expand = function() end, preset = 'luasnip' } })
-    end)
-
-    assert.is_true(helpers.notified(notified, 'snippets.expand is never called'))
-    assert.is_true(helpers.notified(notified, 'is not a snippets preset'))
-  end)
-
   it('says nothing about the snippets preset it does have', function()
     local notified = helpers.notifications(function()
       config.setup({ snippets = { preset = 'default' } })
@@ -282,5 +273,61 @@ describe('registering outside setup()', function()
     config.setup({})
 
     assert.is_nil(config.options.sources.providers.spell)
+  end)
+end)
+
+describe('snippets preset', function()
+  it("points the snippets provider at LuaSnip for 'luasnip'", function()
+    config.setup({ snippets = { preset = 'luasnip' } })
+
+    assert.are.equal('zcmp.sources.snippets.luasnip', config.options.sources.providers.snippets.module)
+    assert.are.equal('luasnip', config.options.snippets.preset)
+  end)
+
+  it('asks LuaSnip first once the preset is on', function()
+    local jumped
+    helpers.stub(package.loaded, 'luasnip', {
+      jumpable = function()
+        return true
+      end,
+      jump = function(direction)
+        jumped = direction
+      end,
+      lsp_expand = function() end,
+      locally_jumpable = function()
+        return true
+      end,
+    })
+    config.setup({ snippets = { preset = 'luasnip' } })
+
+    config.options.snippets.jump(1)
+
+    assert.are.equal(1, jumped)
+    assert.is_true(config.options.snippets.active())
+    assert.is_true(config.options.snippets.active({ direction = -1 }))
+  end)
+
+  it('lets an explicit field beat its preset', function()
+    local mine = function() end
+    config.setup({
+      snippets = { preset = 'luasnip', jump = mine },
+      sources = { providers = { snippets = { module = 'zsnip.complete' } } },
+    })
+
+    assert.are.equal(mine, config.options.snippets.jump)
+    assert.are.equal('zsnip.complete', config.options.sources.providers.snippets.module)
+  end)
+
+  it('says an unknown preset out loud, and known ones not at all', function()
+    local notified = helpers.notifications(function()
+      config.setup({ snippets = { preset = 'mini_snippets' } })
+    end)
+    assert.is_true(helpers.notified(notified, 'not a snippets preset'))
+
+    notified = helpers.notifications(function()
+      config.setup({ snippets = { preset = 'luasnip', expand = function() end } })
+      config.setup({ snippets = { preset = 'default' } })
+    end)
+    assert.are.same({}, notified)
   end)
 end)

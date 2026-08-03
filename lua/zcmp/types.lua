@@ -59,13 +59,15 @@
 ---@field max_items? integer Default cap for providers that set none
 ---@field selection? { preselect?: boolean, auto_insert?: boolean }
 
----How a snippet is stepped through once it is in the buffer. `active` and
----`jump` are what a different engine substitutes; `expand` and `preset` are
----blink.cmp's names, accepted so a config moves over unedited but never
----called -- whatever inserted the snippet expanded it. See |zcmp-snippets|.
+---Which engine holds a snippet once it is in the buffer. A preset rewrites
+---the defaults of the other three fields -- and, for 'luasnip', which module
+---the `snippets` provider points at -- so an explicit field still wins.
+---`expand` is called by ZCmp's own snippet sources and offered to zsnip's;
+---a server's snippet items go through vim.snippet regardless, which is why
+---the 'luasnip' preset answers for both engines. See |zcmp-snippets|.
 ---@class zcmp.SnippetsConfig
----@field preset? "default" Accepted and unused
----@field expand? fun(body: string) Accepted and unused
+---@field preset? "default"|"luasnip"
+---@field expand? fun(body: string)
 ---@field active? fun(filter?: vim.snippet.ActiveFilter): boolean
 ---@field jump? fun(direction: -1|1)
 

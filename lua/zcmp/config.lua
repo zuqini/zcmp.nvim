@@ -29,10 +29,18 @@ local DEFAULTS = {
       snippets = {
         name = 'Snippets',
         module = 'zsnip.complete',
-        -- The one key that is coordination rather than preference: buffer.lua
-        -- is the single writer of 'complete', so zsnip must not append itself.
-        -- How snippets are capped and documented is zsnip's setup() to say.
-        opts = { complete = false },
+        -- `complete` is the one key that is coordination rather than
+        -- preference: buffer.lua is the single writer of 'complete', so zsnip
+        -- must not append itself. How snippets are capped and documented is
+        -- zsnip's setup() to say; how they are expanded is `snippets.expand`,
+        -- resolved when a snippet is accepted rather than here, so a preset
+        -- or an override set later still applies.
+        opts = {
+          complete = false,
+          expand = function(body)
+            M.options.snippets.expand(body)
+          end,
+        },
       },
       buffer = {
         name = 'Buffer',
@@ -62,6 +70,43 @@ local DEFAULTS = {
   },
   signature = { enabled = false },
   appearance = { kind_hl = 'Special' },
+}
+
+---What a snippets preset changes: the functions that drive a session, and the
+---module the `snippets` provider points at. A preset rewrites the *defaults*,
+---before the user's own options merge over them -- an explicit field beats
+---its preset the same way it beats any other default.
+---
+---vim.lsp.completion expands a server's snippet items through vim.snippet
+---regardless (see lsp.lua), so under 'luasnip' both engines can hold a live
+---session: every answer asks LuaSnip first and falls through.
+---@type table<string, fun(base: zcmp.ResolvedConfig)>
+local PRESETS = {
+  default = function() end,
+  luasnip = function(base)
+    base.snippets.expand = function(body)
+      require('luasnip').lsp_expand(body)
+    end
+    base.snippets.active = function(filter)
+      local luasnip = require('luasnip')
+      if filter and filter.direction then
+        return luasnip.jumpable(filter.direction) or vim.snippet.active(filter)
+      end
+      return luasnip.locally_jumpable(1) or vim.snippet.active(filter)
+    end
+    base.snippets.jump = function(direction)
+      local luasnip = require('luasnip')
+      if luasnip.jumpable(direction) then
+        luasnip.jump(direction)
+      else
+        vim.snippet.jump(direction)
+      end
+    end
+    base.sources.providers.snippets = {
+      name = 'Snippets',
+      module = 'zcmp.sources.snippets.luasnip',
+    }
+  end,
 }
 
 local PROVIDER_SHAPE = {
@@ -137,28 +182,21 @@ local function validate(opts, shapes, path, where)
   end
 end
 
----Options ZCmp accepts so that a blink.cmp config moves over unedited, but
----cannot act on. Said out loud at setup(): an override that is silently
----ignored reads exactly like the thing it overrode being broken.
+---A preset ZCmp does not know is not silently the default one -- that reads
+---exactly like the preset being broken. Said out loud instead, with the way
+---any engine plugs in without one.
 ---@param opts table
-local function report_inert(opts)
+local function report_unknown_preset(opts)
   local snippets = opts.snippets
   if type(snippets) ~= 'table' then
     return
   end
-  if snippets.expand then
+  if snippets.preset and not PRESETS[snippets.preset] then
     vim.notify(
-      'zcmp.setup: snippets.expand is never called — whatever inserts the snippet expands it '
-        .. '(zsnip, or vim.lsp.completion through vim.snippet). Substitute an engine through '
-        .. 'snippets.active and snippets.jump.',
-      vim.log.levels.WARN
-    )
-  end
-  if snippets.preset and snippets.preset ~= 'default' then
-    vim.notify(
-      ('zcmp.setup: %q is not a snippets preset; ZCmp has the one. Substitute an engine through '):format(
+      ('zcmp.setup: %q is not a snippets preset; ZCmp has \'default\' and \'luasnip\'. '):format(
         tostring(snippets.preset)
-      ) .. 'snippets.active and snippets.jump.',
+      ) .. 'Substitute another engine through snippets.expand, snippets.active and snippets.jump, '
+        .. "and another source through the snippets provider's `module`.",
       vim.log.levels.WARN
     )
   end
@@ -247,9 +285,13 @@ end
 function M.setup(opts)
   if opts then
     validate(opts, SHAPES, '', 'zcmp.setup')
-    report_inert(opts)
+    report_unknown_preset(opts)
   end
   local base = vim.deepcopy(DEFAULTS)
+  local preset = type(opts) == 'table' and type(opts.snippets) == 'table' and opts.snippets.preset
+  if type(preset) == 'string' and PRESETS[preset] then
+    PRESETS[preset](base)
+  end
   apply_additions(base.sources)
   M.options = merge(base, opts or {})
 end

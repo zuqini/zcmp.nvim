@@ -122,16 +122,17 @@ see [the note in the README](../README.md#one-thing-worth-knowing-about-preselec
 | `is_snippet_active(filter?)` / `snippet_active(filter?)` | — | — |
 
 All of them go through `config.snippets`, so an engine other than
-`vim.snippet` is two functions away: `snippets.active` and `snippets.jump`.
-Because the default is `vim.snippet`, a server's snippet items and any
-snippet plugin that expands through it are already integrated — see
-[the README](../README.md#snippets) for that, and for the LuaSnip shape.
+`vim.snippet` is a preset away — `snippets.preset = 'luasnip'` — or, for one
+there is no preset for, the `snippets.expand`, `snippets.active` and
+`snippets.jump` functions written out. Because the default is `vim.snippet`,
+a server's snippet items and any snippet plugin that expands through it are
+already integrated — see [the README](../README.md#snippets).
 
-`snippets.expand` and `snippets.preset` are blink.cmp's names, accepted so a
-config moves over unedited and never called — whatever put the snippet in the
-buffer expanded it, which is zsnip for a snippet source and
-`vim.lsp.completion` (through `vim.snippet.expand`) for a server's. Setting
-either is reported by `setup()` rather than ignored.
+`snippets.expand` is called for what ZCmp's own snippet sources — and
+zsnip's — put in the buffer. A server's snippet items are expanded by
+`vim.lsp.completion` through `vim.snippet` regardless, which is why the
+`'luasnip'` preset's `active` and `jump` ask LuaSnip first and fall through.
+A preset ZCmp does not know is reported by `setup()` rather than ignored.
 
 ### Documentation
 

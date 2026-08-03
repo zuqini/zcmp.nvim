@@ -46,6 +46,11 @@ entry in 'complete', and every behaviour is an option core already has.
 - `sources/path.lua` — the path source. Only what `getcompletion()` cannot
   do: deciding where a path token starts, and resolving a relative one
   against the buffer's directory.
+- `sources/snippets/` — the shipped snippet sources. `init.lua` is the
+  machinery every one of them needs (start column, matching its own list,
+  expanding on CompleteDone); `luasnip.lua` — which `snippets.preset =
+  'luasnip'` points the provider at — and `nvim_snippets.lua` are adapters
+  over it, one enumeration loop each.
 - `lsp.lua` — trigger-character widening and `vim.lsp.completion`. Both
   delivery paths are deliberate; the header says why.
 - `appearance.lua` — the one highlight zcmp sets.

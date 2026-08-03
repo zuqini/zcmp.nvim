@@ -245,26 +245,26 @@ adapter, no companion plugin and nothing to configure:
   language server and `<Tab>` walks its arguments.
 - **Any snippet plugin that expands with `vim.snippet`.**
 
-An engine with a session of its own — LuaSnip — is those same two functions:
+An engine with a session of its own — LuaSnip — is one line, the same line
+it is in blink.cmp:
 
 ```lua
-snippets = {
-  active = function(filter)
-    local luasnip = require('luasnip')
-    if filter and filter.direction then
-      return luasnip.jumpable(filter.direction)
-    end
-    return luasnip.in_snippet()
-  end,
-  jump = function(direction) require('luasnip').jump(direction) end,
-}
+require('zcmp').setup({ snippets = { preset = 'luasnip' } })
 ```
 
-blink.cmp spells that `snippets.preset = 'luasnip'`. ZCmp has no presets here:
-`snippets.preset` and `snippets.expand` are accepted so a blink config moves
-over unedited, and `setup()` says out loud that neither is called rather than
-ignoring them — an override that is silently dropped reads exactly like the
-thing it overrode being broken.
+The preset rewrites the defaults of `snippets.expand`, `snippets.active` and
+`snippets.jump` to LuaSnip's, and points the `snippets` provider at a source
+ZCmp ships for it ([below](#where-the-snippets-in-the-menu-come-from)). An
+explicit field still wins, the way it wins over any other default. One honest
+limitation: a language server's snippet items expand through `vim.snippet`
+regardless — that is `vim.lsp.completion`'s doing, not ZCmp's — so the
+preset's functions ask LuaSnip first and fall through, and `<Tab>` walks
+either engine's session.
+
+`snippets.expand` is how ZCmp's own snippet sources — and zsnip's — expand
+what gets accepted, so overriding it plugs in an engine there is no preset
+for. A preset ZCmp does not know is reported by `setup()` rather than
+silently treated as the default one.
 
 ### Where the snippets in the menu come from
 
@@ -295,10 +295,25 @@ rest of the menu untouched. If the module is not installed the provider
 contributes nothing, every other source still resolves, and `:ZCmp status`
 names it.
 
-zsnip is the one ZCmp ships pointed at because it already speaks
+For the plugins people arrive with, ZCmp ships the module:
+
+- **LuaSnip** — `snippets.preset = 'luasnip'` already pointed the provider at
+  `zcmp.sources.snippets.luasnip`; there is nothing more to write.
+- **[nvim-snippets](https://github.com/garymjr/nvim-snippets)** — one
+  provider line:
+
+  ```lua
+  require('zcmp').setup({
+    sources = {
+      providers = { snippets = { module = 'zcmp.sources.snippets.nvim_snippets' } },
+    },
+  })
+  ```
+
+zsnip is the one ZCmp ships *pointed at* because it already speaks
 `'complete'` — being a function source, it picks its own start column, so a
 `<div` trigger replaces the whole run rather than the keyword at the end of
-it.
+it. The shipped modules do the same for the other two.
 
 ## Keymaps
 
@@ -403,9 +418,9 @@ require('zcmp').setup({
   fuzzy = { enabled = true },             -- `fuzzy` in 'completeopt'
 
   snippets = {
-    preset = 'default',                   -- accepted, never called
-    expand = function(body) vim.snippet.expand(body) end,   -- likewise
-    -- These two are the ones another engine substitutes:
+    preset = 'default',                   -- or 'luasnip', which rewrites the
+                                          -- three below and the source
+    expand = function(body) vim.snippet.expand(body) end,
     active = function(filter) return vim.snippet.active(filter) end,
     jump = function(direction) vim.snippet.jump(direction) end,
   },
