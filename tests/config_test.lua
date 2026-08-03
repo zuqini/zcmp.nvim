@@ -103,6 +103,37 @@ describe('config', function()
     assert.is_true(config.options.completion.menu.auto_show)
   end)
 
+  -- A provider's `opts` is free-form third-party data, so one that happens to
+  -- carry positional entries is still a map. Replacing it wholesale would drop
+  -- the keys zcmp sets, and `complete = false` is what keeps zsnip out of the
+  -- option `buffer.lua` is the single writer of.
+  it('merges a provider opts table that has an array part', function()
+    config.setup({ sources = { providers = { snippets = { opts = { 'lua', limit = 5 } } } } })
+
+    local opts = config.options.sources.providers.snippets.opts
+    assert.are.equal(5, opts.limit)
+    assert.is_false(opts.complete)
+    assert.is_false(opts.documentation)
+  end)
+
+  -- `{ 'lsp', want_snippets and 'snippets' or nil, 'buffer' }` is a table with
+  -- a hole, and `ipairs` stops at one. Replacing with it would lose every entry
+  -- past the hole with nothing said; merging keeps them reachable.
+  it('does not replace a list with one that has a hole in it', function()
+    config.setup({ sources = { default = { 'lsp', nil, 'buffer' } } })
+
+    assert.contains(config.options.sources.default, 'buffer')
+  end)
+
+  -- The base decides whether `{}` empties, and a per_filetype entry that came
+  -- from a registration is a SourceList -- which vim.islist alone says no to.
+  it('takes an empty list over a registered filetype list', function()
+    config.add_filetype_source('lua', { 'path' })
+    config.setup({ sources = { per_filetype = { lua = {} } } })
+
+    assert.are.same({}, config.options.sources.per_filetype.lua)
+  end)
+
   it('does not keep a reference to the table it was handed', function()
     local per_filetype = { markdown = { 'path' } }
     config.setup({ sources = { per_filetype = per_filetype } })
@@ -178,6 +209,72 @@ describe('registering outside setup()', function()
     config.setup({})
 
     assert.are.same({ 'path', 'buffer' }, { unpack(config.options.sources.per_filetype.markdown) })
+  end)
+
+  -- A `zcmp.SourceList` carries `inherit_defaults` alongside its entries, so
+  -- vim.islist says no and it used to merge key by key -- which merges the
+  -- entries by index, leaving whatever the registration had put beyond the end
+  -- of the user's list still in it.
+  it('replaces a filetype list a registration had added to', function()
+    config.add_filetype_source('lua', { 'lazydev', 'snacks' })
+    config.setup({ sources = { per_filetype = { lua = { inherit_defaults = true, 'mine' } } } })
+
+    local lua = config.options.sources.per_filetype.lua
+    assert.are.same({ 'mine' }, { unpack(lua) })
+    assert.is_true(lua.inherit_defaults)
+  end)
+
+  it('reports an unknown key in a provider registered outside setup()', function()
+    local notified = helpers.notifications(function()
+      config.add_provider('spell', { flag = { 'kspell' } })
+    end)
+
+    assert.is_true(helpers.notified(notified, 'zcmp.add_source_provider: unknown option'))
+    assert.is_true(helpers.notified(notified, 'sources.providers.spell.flag'))
+  end)
+
+  -- Reported and registered anyway, as setup() would: an id no provider
+  -- answers to is `:ZCmp status`'s "no such provider", not a reason to drop it.
+  it('reports a filetype source that is no provider id', function()
+    local notified = helpers.notifications(function()
+      config.add_filetype_source('markdown', { 1 })
+    end)
+
+    assert.is_true(helpers.notified(notified, 'zcmp.add_filetype_source: sources.per_filetype.markdown.1'))
+  end)
+
+  -- It would file an entry naming no sources, which resolves to exactly
+  -- `sources.default`: a call that did nothing and said nothing.
+  it('reports a filetype source with no ids at all', function()
+    local notified = helpers.notifications(function()
+      config.add_filetype_source('markdown', {})
+    end)
+
+    assert.is_true(helpers.notified(notified, 'no provider ids'))
+    assert.is_nil(config.options.sources.per_filetype.markdown)
+  end)
+
+  -- The one thing that cannot be reported and carried on with: it is the key a
+  -- source list looks the entry up by.
+  it('refuses a filetype that is no filetype', function()
+    local notified = helpers.notifications(function()
+      config.add_filetype_source({}, 'path')
+      config.add_provider(1, { flags = { 'kspell' } })
+    end)
+
+    assert.is_true(helpers.notified(notified, 'filetype should be a string, got table'))
+    assert.is_true(helpers.notified(notified, 'id should be a string, got number'))
+    assert.are.same({}, config.options.sources.per_filetype)
+  end)
+
+  it('does not keep a reference to the provider it was handed', function()
+    local provider = { flags = { 'kspell' } }
+    config.add_provider('spell', provider)
+
+    provider.flags[1] = 'k/usr/share/dict/words'
+    config.setup({})
+
+    assert.are.same({ 'kspell' }, config.options.sources.providers.spell.flags)
   end)
 
   it('forgets registrations on reset', function()

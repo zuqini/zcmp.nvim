@@ -14,7 +14,8 @@
 
 ---Keys mapped in every buffer ZCmp attaches to, on top of a preset. Each
 ---value is a list of commands tried in order until one reports that it did
----something; `'fallback'` hands the key to whatever was mapped before.
+---something; `'fallback'` hands the key to whatever was mapped before, and
+---always answers, so nothing written after it in a list can run.
 ---@class zcmp.KeymapConfig
 ---@field preset? zcmp.KeymapPreset
 ---@field [string] zcmp.Command[]

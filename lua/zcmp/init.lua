@@ -76,7 +76,16 @@ end
 ---Detaches first, so that a second |zcmp.setup()| re-derives the mappings as
 ---well as the options -- a buffer already attached is one `wire()` leaves the
 ---keymaps of alone.
+---
+---Does nothing at all below the 0.12.0 floor: the first thing it reads is an
+---option that Neovim does not have, and an unknown-option traceback out of a
+---buffer module names nothing a user can act on. Said here rather than in
+---setup(), because this is the door every other way in goes through.
 function M.enable()
+  if vim.fn.has('nvim-0.12') == 0 then
+    vim.notify('zcmp: Neovim 0.12.0+ is required', vim.log.levels.ERROR)
+    return
+  end
   buffer.detach_all()
   appearance.apply()
   buffer.apply_globals()
@@ -101,10 +110,18 @@ function M.is_enabled()
   return enabled
 end
 
----Re-read the source list everywhere, and start any provider module that has
----arrived since. What `:ZCmp reload` runs.
+---Re-read the source list in every buffer ZCmp drives, and start any provider
+---module that has arrived since. What `:ZCmp reload` runs. While disabled it
+---only forgets which modules have started, so that enabling again starts them.
 function M.reload()
   require('zcmp.sources').reset()
+  -- Deliberately before the guard: forgetting is all reloading can mean while
+  -- disabled. Attaching here would map keys and write 'complete' with every
+  -- autocmd gone and nothing left to maintain them -- a state |zcmp.is_enabled()|
+  -- would go on denying.
+  if not enabled then
+    return
+  end
   buffer.detach_all()
   buffer.attach_all()
 end

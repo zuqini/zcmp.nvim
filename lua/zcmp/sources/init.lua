@@ -9,6 +9,12 @@ local config = require('zcmp.config')
 
 local M = {}
 
+---Why a provider contributes nothing *here*, rather than at all. Named because
+---`:checkhealth zcmp` tells this apart from every other problem -- it is news
+---about the buffer, not a fault to report -- and a reworded literal would
+---silently reclassify it.
+M.UNAVAILABLE = 'unavailable in this buffer'
+
 ---@class zcmp.ResolvedSource
 ---@field id string
 ---@field provider zcmp.Provider
@@ -20,6 +26,23 @@ local M = {}
 ---would not start.
 ---@type table<string, true|string>
 local started = {}
+
+---The options `started` was filled against. |zcmp.setup()| replaces
+---`config.options` wholesale rather than editing it, so a change of identity is
+---exactly "these are different options now" -- and a module started from the
+---previous set is holding `opts` that have since been replaced.
+---@type table?
+local resolved_against = nil
+
+---Watched here rather than reset from setup(), because this is the invariant:
+---`started` belongs to one resolved config, and nowhere that replaces options
+---can forget to say so.
+local function forget_stale()
+  if resolved_against ~= config.options then
+    resolved_against = config.options
+    started = {}
+  end
+end
 
 ---@param bufnr integer
 ---@return string[]
@@ -86,7 +109,8 @@ local function entries(id, provider, start)
     started[provider.module] = ok_enable or ('failed to start: %s'):format(err)
   end
   -- Remembered rather than retried: a module that would not start is not one
-  -- to serve matches out of, and |zcmp.reload()| is how you ask it again.
+  -- to serve matches out of, and |zcmp.reload()| -- or another |zcmp.setup()| --
+  -- is how you ask it again.
   if type(started[provider.module]) == 'string' then
     return resolved, ('module %q %s'):format(provider.module, started[provider.module])
   end
@@ -116,7 +140,7 @@ local function one(id, provider, bufnr, start)
     return { id = id, provider = provider, entries = {}, active = false, problem = 'disabled' }
   end
   if provider.available and not provider.available(bufnr) then
-    return { id = id, provider = provider, entries = {}, active = false, problem = 'unavailable in this buffer' }
+    return { id = id, provider = provider, entries = {}, active = false, problem = M.UNAVAILABLE }
   end
   local found, problem = entries(id, provider, start)
   return { id = id, provider = provider, entries = found, active = #found > 0, problem = problem }
@@ -126,6 +150,7 @@ end
 ---@param start boolean
 ---@return zcmp.ResolvedSource[]
 local function list(bufnr, start)
+  forget_stale()
   local providers = config.options.sources.providers
   local seen, resolved = {}, {}
 
@@ -181,7 +206,8 @@ function M.resolve(bufnr)
 end
 
 ---Forget which provider modules have been started, so the next resolve enables
----them again. Used by |zcmp.reload()| and by tests.
+---them again -- with whatever `opts` are resolved by then. What |zcmp.reload()|
+---asks for; a new set of options does the same by itself.
 function M.reset()
   started = {}
 end

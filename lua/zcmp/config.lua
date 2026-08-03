@@ -113,21 +113,22 @@ end
 ---@param opts table
 ---@param shapes table
 ---@param path string
-local function validate(opts, shapes, path)
+---@param where string The call being validated, for the message
+local function validate(opts, shapes, path, where)
   for key, value in pairs(opts) do
     local name = path == '' and tostring(key) or path .. '.' .. tostring(key)
     local shape = shapes[key] or shapes.__any
     if not shape then
-      vim.notify(('zcmp.setup: unknown option %q'):format(name), vim.log.levels.WARN)
+      vim.notify(('%s: unknown option %q'):format(where, name), vim.log.levels.WARN)
     elseif type(shape) == 'table' and shape[1] == nil then
       if type(value) ~= 'table' then
-        vim.notify(('zcmp.setup: %s should be a table, got %s'):format(name, type(value)), vim.log.levels.WARN)
+        vim.notify(('%s: %s should be a table, got %s'):format(where, name, type(value)), vim.log.levels.WARN)
       else
-        validate(value, shape, name)
+        validate(value, shape, name, where)
       end
     elseif not vim.tbl_contains(types(shape), type(value)) then
       vim.notify(
-        ('zcmp.setup: %s should be %s, got %s'):format(name, table.concat(types(shape), ' or '), type(value)),
+        ('%s: %s should be %s, got %s'):format(where, name, table.concat(types(shape), ' or '), type(value)),
         vim.log.levels.WARN
       )
     end
@@ -161,6 +162,19 @@ local function report_inert(opts)
   end
 end
 
+---A `zcmp.SourceList` is a list carrying one key of its own,
+---`inherit_defaults`, so `vim.islist` says no to it -- and merging one key by
+---key merges the entries by *index*, leaving whatever was longer underneath.
+---
+---Anything else with both an array part and keys of its own is a provider's
+---`opts`: free-form third-party data, a map, and merged as one. A list with a
+---hole in it is no list either, for the same reason it is not one to `ipairs`.
+---@param value table
+---@return boolean
+local function islist(value)
+  return vim.islist(value) or (value.inherit_defaults ~= nil and vim.tbl_count(value) == #value + 1)
+end
+
 ---Deep merge, except that a list replaces rather than extends: a
 ---`sources.default` of two entries means those two, not those two plus the
 ---four that were there.
@@ -181,7 +195,7 @@ local function merge(base, override)
   end
   -- An empty table cannot be told from an empty map by its shape, so the base
   -- decides: emptying a list is an instruction, `{}` over a map is not.
-  if vim.islist(override) and (next(override) ~= nil or vim.islist(base)) then
+  if islist(override) and (next(override) ~= nil or islist(base)) then
     return vim.deepcopy(override)
   end
   local merged = vim.deepcopy(base)
@@ -230,7 +244,7 @@ end
 ---@param opts? zcmp.Config
 function M.setup(opts)
   if opts then
-    validate(opts, SHAPES, '')
+    validate(opts, SHAPES, '', 'zcmp.setup')
     report_inert(opts)
   end
   local base = vim.deepcopy(DEFAULTS)
@@ -238,12 +252,36 @@ function M.setup(opts)
   M.options = merge(base, opts or {})
 end
 
----Register a provider, whether or not setup() has run yet.
+---A key `SHAPES` cannot describe, because it describes values: the id a
+---registration is filed under, which is the name a source list will look it up
+---by. Nothing else can be filed under, so this is the one check that refuses.
+---@param where string
+---@param name string
+---@param key any
+---@return boolean
+local function keyed(where, name, key)
+  if type(key) == 'string' then
+    return true
+  end
+  vim.notify(('%s: %s should be a string, got %s'):format(where, name, type(key)), vim.log.levels.WARN)
+  return false
+end
+
+---Register a provider, whether or not setup() has run yet. Validated and
+---copied on the same terms as one written into setup(): a registration is the
+---same table by another door, and the plugin that made it goes on holding its
+---own copy.
 ---@param id string
 ---@param provider zcmp.Provider
 function M.add_provider(id, provider)
-  additions.providers[id] = provider
-  M.options.sources.providers[id] = provider
+  if not keyed('zcmp.add_source_provider', 'id', id) then
+    return
+  end
+  validate({ [id] = provider }, { __any = PROVIDER_SHAPE }, 'sources.providers', 'zcmp.add_source_provider')
+  -- Two copies rather than one shared between them: `additions` outlives every
+  -- `options` setup() replaces, and must not come to alias the live one.
+  additions.providers[id] = vim.deepcopy(provider)
+  M.options.sources.providers[id] = vim.deepcopy(provider)
 end
 
 ---Add providers to one filetype's list, whether or not setup() has run yet.
@@ -252,6 +290,19 @@ end
 function M.add_filetype_source(filetype, ids)
   ---@type string[]
   local adding = type(ids) == 'table' and ids or { ids }
+  if not keyed('zcmp.add_filetype_source', 'filetype', filetype) then
+    return
+  end
+  -- The third way to call this wrong, and the quietest: it would file an entry
+  -- naming no sources, which resolves to exactly `sources.default` -- a call
+  -- that did nothing, said nothing, and reads as the ids having been ignored.
+  if #adding == 0 then
+    vim.notify(('zcmp.add_filetype_source: no provider ids for %q'):format(filetype), vim.log.levels.WARN)
+    return
+  end
+  -- Reported and then added anyway, as setup() would: an id no provider answers
+  -- to is `:ZCmp status`'s "no such provider", not a reason to drop the call.
+  validate(adding, { __any = 'string' }, 'sources.per_filetype.' .. filetype, 'zcmp.add_filetype_source')
   add_ids(additions.per_filetype, filetype, adding)
   add_ids(M.options.sources.per_filetype, filetype, adding)
 end

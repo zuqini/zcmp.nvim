@@ -226,7 +226,9 @@ function M.hide_documentation()
   if not win then
     return false
   end
-  return pcall(api.nvim_win_close, win, true)
+  -- Parenthesised: every command answers with one boolean, and pcall's second
+  -- value would ride out of a `return cmp.hide_documentation()` in a user's own.
+  return (pcall(api.nvim_win_close, win, true))
 end
 
 ---@param count? integer Lines; a half page by default
@@ -261,7 +263,7 @@ function M.hide_signature()
   if not M.is_signature_visible() then
     return false
   end
-  return pcall(api.nvim_win_close, vim.b.lsp_floating_preview, true)
+  return (pcall(api.nvim_win_close, vim.b.lsp_floating_preview, true))
 end
 
 ---@return boolean

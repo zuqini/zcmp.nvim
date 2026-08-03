@@ -19,6 +19,13 @@ local SNIPPET_COMMANDS = {
   snippet_delete = true,
 }
 
+---Commands that run the mapping the key had before ZCmp took it, and so end
+---the list: whatever follows one can never run.
+local TERMINAL_COMMANDS = {
+  fallback = true,
+  fallback_to_mappings = true,
+}
+
 local SHARED = {
   ['<C-space>'] = { 'show', 'show_documentation', 'hide_documentation' },
   ['<Up>'] = { 'select_prev', 'fallback' },
@@ -38,8 +45,11 @@ local function preset(keymap)
   return vim.tbl_extend('force', SHARED, keymap)
 end
 
+---The four |zcmp.KeymapPreset|s, and all of them: a name that is not one is
+---reported and the default used, so this is a closed set at runtime as well as
+---in the type. A keymap of your own is per-key entries over a preset.
 ---@type table<zcmp.KeymapPreset, table<string, zcmp.Command[]>>
-M.presets = {
+local PRESETS = {
   none = {},
   default = preset({
     ['<C-e>'] = { 'hide' },
@@ -59,21 +69,43 @@ M.presets = {
 ---@type table<integer, { keys: { mode: string, lhs: string }[], captured: table<string, table> }>
 local installed = {}
 
+---A command written after a terminal one can never run. Said out loud here,
+---next to the preset that is the other thing a keymap can get wrong, and
+---because a command that silently never runs reads as the command being broken.
+---@param lhs string
+---@param entry zcmp.Command[]
+local function report_unreachable(lhs, entry)
+  for index, command in ipairs(entry) do
+    if TERMINAL_COMMANDS[command] and index < #entry then
+      vim.notify_once(
+        ('zcmp: %s runs nothing after %q — it is the last command a list can hold'):format(lhs, command),
+        vim.log.levels.WARN
+      )
+      return
+    end
+  end
+end
+
 ---The preset with the user's own entries over it. An entry of `{}` is how a
 ---key is left alone.
 ---@return table<string, zcmp.Command[]>
 function M.resolve()
   local keymap = config.options.keymap
   local name = keymap.preset or 'default'
-  if not M.presets[name] then
+  if not PRESETS[name] then
     vim.notify_once(('zcmp: %q is not a keymap preset'):format(name), vim.log.levels.WARN)
     name = 'default'
   end
 
-  local resolved = vim.deepcopy(M.presets[name])
+  local resolved = vim.deepcopy(PRESETS[name])
   for lhs, entry in pairs(keymap) do
     if lhs ~= 'preset' then
       resolved[lhs] = entry
+    end
+  end
+  for lhs, entry in pairs(resolved) do
+    if type(entry) == 'table' then
+      report_unreachable(lhs, entry)
     end
   end
   return resolved
@@ -111,7 +143,7 @@ end
 ---@param captured table<string, table>
 local function run(mode, lhs, entry, captured)
   for _, command in ipairs(entry) do
-    if command == 'fallback' or command == 'fallback_to_mappings' then
+    if TERMINAL_COMMANDS[command] then
       return fallback.run(mode, lhs, captured[mode .. lhs])
     end
 

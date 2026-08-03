@@ -24,7 +24,8 @@ keeps its default, so a config that is wrong in one place still gets the rest.
 
 Take over completion: write the options, install the autocmds, and attach to
 every buffer already open. `setup()` calls it; call it yourself only after
-`disable()`.
+`disable()`. Below Neovim 0.12.0 it reports that and wires nothing, rather than
+failing on the first option this Neovim does not have.
 
 ### `zcmp.disable()`
 
@@ -36,8 +37,10 @@ the global options ZCmp wrote are restored.
 
 ### `zcmp.reload()`
 
-Re-derive `'complete'` in every buffer, and start any provider module that has
-arrived since. What `:ZCmp reload` runs.
+Re-derive `'complete'` in every buffer zcmp drives, and start any provider
+module that has arrived since. What `:ZCmp reload` runs. While disabled it only
+forgets which modules have started, so that enabling again starts them — it
+never takes a buffer back that `disable()` has given up.
 
 ### `zcmp.version` → `string`
 
@@ -79,6 +82,9 @@ this loses nothing.
 Each returns whether it did anything. That is what lets a keymap entry fall
 through: `{ 'select_next', 'snippet_forward', 'fallback' }` tries each in turn
 until one answers `true`.
+
+`fallback` always answers, so it ends the list: anything written after it can
+never run, and zcmp says so with `vim.notify`. Write it last.
 
 ### The menu
 

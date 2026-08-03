@@ -68,6 +68,35 @@ describe('a second setup()', function()
     assert.contains(keys(bufnr), '<CR>')
     assert.are.equal(require('zcmp.sources.path').source(), vim.bo[bufnr].complete)
   end)
+
+  -- setup() replaces the resolved options wholesale, a provider's `opts` with
+  -- them -- but a module started from the first set was remembered as started,
+  -- so it went on holding options the second setup() had already replaced.
+  it('offers a provider module the opts it has just resolved', function()
+    local started = {}
+    helpers.stub(package.loaded, 'fake_source', {
+      completefunc = function() end,
+      enable = function(opts)
+        started[#started + 1] = opts
+      end,
+    })
+    local function setup(limit)
+      zcmp.setup({
+        sources = {
+          default = { 'fake' },
+          providers = { fake = { module = 'fake_source', opts = { limit = limit } } },
+        },
+      })
+    end
+
+    setup(1)
+    local bufnr = helpers.buffer()
+    helpers.settle(bufnr)
+    setup(2)
+    helpers.settle(bufnr)
+
+    assert.are.same({ { limit = 1 }, { limit = 2 } }, started)
+  end)
 end)
 
 describe('registering a source', function()
@@ -143,6 +172,51 @@ describe('reload()', function()
     assert.is_true(buffer.attached(bufnr))
     assert.are.equal('.^100,w^100,b^100', vim.bo[bufnr].complete)
     assert.is_true(#keymap.installed(bufnr) > 0)
+  end)
+
+  -- `:ZCmp disable` then `:ZCmp reload` used to map the keys and write
+  -- 'complete' again, with the autocmds gone and is_enabled() saying false --
+  -- a state nothing else could produce and nothing was left to maintain.
+  it('takes nothing back while the plugin is disabled', function()
+    zcmp.setup({ sources = { default = { 'buffer' } } })
+    local bufnr = helpers.buffer()
+    local original = vim.bo[bufnr].complete
+    helpers.settle(bufnr)
+    assert.are_not.equal(original, vim.bo[bufnr].complete)
+
+    zcmp.disable()
+    zcmp.reload()
+    vim.wait(100)
+
+    assert.is_false(zcmp.is_enabled())
+    assert.is_false(buffer.attached(bufnr))
+    assert.are.same({}, keymap.installed(bufnr))
+    assert.are.equal(original, vim.bo[bufnr].complete)
+  end)
+end)
+
+-- The first thing enable() reads is an option an older Neovim does not have,
+-- and an unknown-option traceback out of a buffer module names nothing a user
+-- can act on.
+describe('the version floor', function()
+  it('wires nothing below it, and says why', function()
+    local has = vim.fn.has
+    helpers.stub(vim.fn, 'has', function(feature)
+      return feature == 'nvim-0.12' and 0 or has(feature)
+    end)
+    local bufnr = helpers.buffer()
+    local complete = vim.bo[bufnr].complete
+
+    local notified = helpers.notifications(function()
+      zcmp.setup({ sources = { default = { 'buffer' } } })
+    end)
+    vim.wait(100)
+
+    assert.is_true(helpers.notified(notified, 'Neovim 0.12.0+ is required'))
+    assert.is_false(zcmp.is_enabled())
+    assert.is_false(buffer.attached(bufnr))
+    assert.are.equal(complete, vim.bo[bufnr].complete)
+    assert.are.same({}, keymap.installed(bufnr))
   end)
 end)
 

@@ -93,6 +93,37 @@ describe('source resolution', function()
     assert.are.equal(2, #started)
   end)
 
+  -- `started` belongs to one resolved config. setup() replaces `options`
+  -- wholesale, a provider's `opts` with them, so a module started from the
+  -- previous set is holding options that have since been replaced. Nothing here
+  -- calls sources.reset(): the point is that no call site has to remember to.
+  it('starts a module again when the options are replaced', function()
+    local bufnr = helpers.buffer()
+    local started = {}
+    register('fake_source', {
+      completefunc = function() end,
+      enable = function(opts)
+        started[#started + 1] = opts
+      end,
+    })
+    local function setup(limit)
+      config.setup({
+        sources = {
+          default = { 'fake' },
+          providers = { fake = { module = 'fake_source', opts = { limit = limit } } },
+        },
+      })
+    end
+
+    setup(1)
+    sources.resolve(bufnr)
+    sources.resolve(bufnr)
+    setup(2)
+    sources.resolve(bufnr)
+
+    assert.are.same({ { limit = 1 }, { limit = 2 } }, started)
+  end)
+
   -- The snippets provider is zsnip's, and a config that lists it without
   -- installing zsnip must still complete everything else.
   it('keeps the other sources when a provider module is missing', function()

@@ -55,6 +55,22 @@ describe(':checkhealth zcmp', function()
     assert.are.same({ 'Other completion engines', 'Reporting a bug' }, { sections[5], sections[6] })
   end)
 
+  -- Every section after the first reads an option that arrived with the floor,
+  -- and an unknown option raises rather than answering nil -- which aborted the
+  -- run and took the one line explaining why down with it.
+  it('stops after the environment below the floor', function()
+    local has = vim.fn.has
+    helpers.stub(vim.fn, 'has', function(feature)
+      return feature == 'nvim-0.12' and 0 or has(feature)
+    end)
+
+    local report = recorder()
+    require('zcmp.health').check()
+
+    assert.are.same({ 'Environment' }, report.sections)
+    assert.are.equal('error', entry(report, '0.12.0+ is required').kind)
+  end)
+
   -- A provider may declare both `flags` and a `module`; the flags still serve
   -- when the module is missing, and a plain tick hides the one thing
   -- checkhealth is here to find.

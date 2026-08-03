@@ -98,7 +98,7 @@ local function check_sources(bufnr)
       vim.health.warn(('%s: %s — serving %s'):format(name, source.problem, table.concat(source.entries, ',')))
     elseif source.active then
       vim.health.ok(('%s: %s'):format(name, table.concat(source.entries, ',')))
-    elseif source.problem == 'unavailable in this buffer' then
+    elseif source.problem == sources.UNAVAILABLE then
       vim.health.info(('%s: nothing to serve in this buffer'):format(name))
     else
       vim.health.warn(('%s: %s'):format(name, source.problem or 'contributes nothing'))
@@ -189,6 +189,12 @@ end
 function M.check(bufnr)
   bufnr = bufnr or subject()
   check_environment()
+  -- Every section below reads an option that arrived with the floor, and an
+  -- unknown option raises rather than answering nil: the run would abort and
+  -- take the one line explaining why down with it.
+  if vim.fn.has('nvim-0.12') == 0 then
+    return
+  end
   check_setup()
   check_sources(bufnr)
   check_buffer(bufnr)

@@ -74,6 +74,7 @@ which is most of the suite's wall-clock time; `--filter` past
 | `health_test.lua` | Every `:checkhealth zcmp` section, against a recording `vim.health` stub |
 | `commands_test.lua` | `:ZCmp` dispatch, completion, status output, enable/disable/reload |
 | `integration_test.lua` | Real keystrokes in a child Neovim: what the menu offers, what accepting puts in the buffer, and which key does what |
+| `docs_test.lua` | The default-config block in README.md and doc/zcmp.txt, run as Lua and compared against `config.lua`'s own defaults |
 
 ## Test Environment
 

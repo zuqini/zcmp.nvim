@@ -157,7 +157,8 @@ Each entry is tried in order until one reports that it did something.
 `'fallback'` is the escape hatch: it runs whatever the key was mapped to
 before ZCmp attached — a buffer-local mapping, a plugin's global one, or the
 built-in behaviour of the key. That is how `<Tab>` still indents, `<CR>` still
-opens a line, and an autopair plugin still pairs.
+opens a line, and an autopair plugin still pairs. It always answers, so write
+it last: a command after it can never run, and zcmp says so.
 
 An entry may also be a function, which is handed the commands table
 (`require('zcmp.api')` — the list in [docs/api.md](docs/api.md), not the
@@ -204,7 +205,7 @@ require('zcmp').setup({
       max_items = nil,                    -- default cap for providers with none
       selection = {
         preselect = true,                 -- select the item a source marked
-        auto_insert = false,              -- insert it before it is accepted
+        auto_insert = false,              -- when on, inserts before accepting
       },
     },
     trigger = { delay_ms = 200 },         -- 'autocompletedelay'
@@ -253,7 +254,7 @@ binding that accepts anything. `:checkhealth zcmp` says so.
 | --- | --- |
 | `:ZCmp` or `:ZCmp status` | What is serving this buffer, and what `'complete'` came out as |
 | `:ZCmp enable` / `:ZCmp disable` | Take over completion, or hand it back |
-| `:ZCmp reload` | Re-read the source list, and start a provider module that has arrived since |
+| `:ZCmp reload` | Re-read the source list in every buffer zcmp drives, and start a provider module that has arrived since |
 
 `:checkhealth zcmp` answers the questions an empty menu raises: whether the
 engine is enabled, whether this buffer is one ZCmp drives, which sources

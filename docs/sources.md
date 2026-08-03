@@ -49,7 +49,11 @@ A module is a source if it has either of:
   ZCmp writes the entry itself.
 
 If the module also has **`enable(opts)`**, it is called once, with the
-provider's `opts`, the first time the provider joins a buffer's source list.
+provider's `opts`, the first time the provider joins a buffer's source list —
+and again after a later `setup()` or `zcmp.reload()`, which offer it the `opts`
+they resolved. `source()` must not depend on it: `:ZCmp status` and
+`:checkhealth zcmp` ask a provider for its entry without starting anything, so
+they can reach `source()` before any `enable()` has run.
 
 That is the entire contract. A working source, in full:
 

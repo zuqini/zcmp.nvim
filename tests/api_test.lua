@@ -206,6 +206,20 @@ describe('documentation commands', function()
     assert.is_false(vim.api.nvim_win_is_valid(win))
   end)
 
+  -- A command answers with one boolean. The close runs under pcall, whose
+  -- second value -- the message, and only on the failure this stubs in -- would
+  -- otherwise ride out of a `return cmp.hide_documentation()` a user wrote.
+  it("answers with one value, not pcall's two", function()
+    local win = popup()
+    helpers.pum({ selected = 0, preview_winid = win })
+    helpers.stub(vim.api, 'nvim_win_close', function()
+      error('E444: Cannot close last window')
+    end)
+
+    assert.are.equal(1, select('#', api.hide_documentation()))
+    assert.is_false(api.hide_documentation())
+  end)
+
   -- Core opens it with the menu and offers no way to ask afterwards; the
   -- command exists so a blink keymap moves over unedited.
   it('always falls through a request to show it', function()

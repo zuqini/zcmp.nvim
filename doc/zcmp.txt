@@ -103,7 +103,7 @@ Merges {opts} over the defaults, creates |:ZCmp|, and enables the engine.
           max_items = nil,                     -- cap for providers with none
           selection = {
             preselect = true,                  -- `preselect` in 'completeopt'
-            auto_insert = false,               -- drops `noinsert`
+            auto_insert = false,               -- when on, drops `noinsert`
           },
         },
         trigger = { delay_ms = 200 },          -- 'autocompletedelay'
@@ -219,7 +219,10 @@ A module is a source if it has either of:
                               writes the entry itself
 
 If it also has `enable({opts})`, that is called once -- with the provider's
-`opts` -- the first time the provider joins a buffer's source list.
+`opts` -- the first time the provider joins a buffer's source list, and again
+after a later |zcmp.setup()| or |zcmp.reload()|, which offer it the `opts`
+they resolved. `source()` must not depend on it having run: `:ZCmp status`
+and `:checkhealth zcmp` ask for an entry without starting anything.
 
 Two things a function source has to get right:
 
@@ -284,6 +287,9 @@ key. That is how <Tab> still indents, <CR> still opens a line, and an
 autopair plugin still pairs -- ZCmp knows about none of them.
 
 `fallback_to_mappings` is accepted as a synonym.
+
+`fallback` always answers, so it ends the list: a command written after it can
+never run, and ZCmp says so once with |vim.notify()|. Write it last.
 
 Mappings are installed per buffer, and removed again on |zcmp.disable()| --
 which also puts back whatever they displaced. A command list containing a
@@ -392,7 +398,8 @@ zcmp.hide_signature()   Close the floating preview.
 
                                                                 *zcmp.enable()*
 zcmp.enable()           Take over completion: write the options, install the
-                        autocmds, attach to every open buffer.
+                        autocmds, attach to every open buffer. Below
+                        Neovim 0.12.0 it reports that and wires nothing.
 
                                                                *zcmp.disable()*
 zcmp.disable()          Hand it back. Mappings are removed and what they
@@ -407,8 +414,11 @@ zcmp.disable()          Hand it back. Mappings are removed and what they
 zcmp.is_enabled()
 
                                                                 *zcmp.reload()*
-zcmp.reload()           Re-derive 'complete' everywhere, and start any
-                        provider module that has arrived since.
+zcmp.reload()           Re-derive 'complete' in every buffer ZCmp drives,
+                        and start any provider module that has arrived
+                        since. While disabled it only forgets which
+                        modules have started, so that enabling again
+                        starts them; it takes no buffer back.
 
                                                    *zcmp.add_source_provider()*
 zcmp.add_source_provider({id}, {provider})

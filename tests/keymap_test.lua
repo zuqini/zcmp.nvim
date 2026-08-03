@@ -61,6 +61,18 @@ describe('the keymap', function()
     assert.is_true(helpers.notified(notified, 'keymap preset'))
   end)
 
+  -- `fallback` runs the mapping the key had before and ends the list, so a
+  -- command written after it silently never runs.
+  it('reports a command that could never run', function()
+    local bufnr = helpers.buffer()
+    local notified = helpers.notifications(function()
+      config.setup({ keymap = { preset = 'none', ['<Tab>'] = { 'fallback', 'select_next' } } })
+      keymap.apply(bufnr)
+    end)
+
+    assert.is_true(helpers.notified(notified, 'runs nothing after'))
+  end)
+
   it('installs its keys buffer-locally', function()
     local bufnr = helpers.buffer()
     config.setup({ keymap = { preset = 'enter' } })
