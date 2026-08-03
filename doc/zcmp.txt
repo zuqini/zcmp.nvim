@@ -140,6 +140,10 @@ To have <CR> take the first match whatever produced it, bind
 |zcmp.select_and_accept()| rather than |zcmp.accept()|; the difference
 between the two is exactly this case.
 
+Neovim 0.12.0 has no `preselect` flag at all, so nothing is ever selected
+while the menu opens by itself and |zcmp.select_and_accept()| is the only
+binding that accepts anything. `:checkhealth zcmp` says so.
+
 ==============================================================================
 5. SOURCES                                                       *zcmp-sources*
 

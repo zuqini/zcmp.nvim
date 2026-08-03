@@ -17,28 +17,56 @@ local attached = {}
 ---@type table<string, any>?
 local globals = nil
 
+---@type table<string, boolean>?
+local understood = nil
+
+---'completeopt' raises E474 rather than ignoring a value it does not know, and
+---`preselect` is newer than the 0.12.0 floor. Asked once, by trying each.
+---@param flag string
+---@return boolean
+local function known(flag)
+  if not understood then
+    understood = {}
+    local saved = vim.go.completeopt
+    for _, name in ipairs({ 'menuone', 'fuzzy', 'popup', 'noinsert', 'preselect' }) do
+      understood[name] = pcall(function()
+        vim.go.completeopt = 'menuone,' .. name
+      end)
+    end
+    vim.go.completeopt = saved
+  end
+  return understood[flag] == true
+end
+
+---Whether this Neovim can put an item under the cursor while 'autocomplete' is
+---on. `:checkhealth zcmp` says so when it cannot.
+---@return boolean
+function M.can_preselect()
+  return known('preselect')
+end
+
 ---@return string
 function M.completeopt()
   local completion = config.options.completion
   local selection = completion.list.selection
 
   local opts = { 'menuone' }
-  if config.options.fuzzy.enabled ~= false then
+  if config.options.fuzzy.enabled ~= false and known('fuzzy') then
     opts[#opts + 1] = 'fuzzy'
   end
-  if completion.documentation.auto_show ~= false then
+  if completion.documentation.auto_show ~= false and known('popup') then
     opts[#opts + 1] = 'popup'
   end
   -- 'noinsert' is the one flag 'autocomplete' ignores that is still
   -- load-bearing: vim.lsp.completion calls vim.fn.complete() itself and that
   -- path honours it. Without it the server's first item is inserted as you
   -- type, so `vim.` becomes `vim.F` and the next keystroke appends to it.
-  if not selection.auto_insert then
+  if not selection.auto_insert and known('noinsert') then
     opts[#opts + 1] = 'noinsert'
   end
   -- 'autocomplete' forces 'noselect' on, and 'preselect' is what overrides it
   -- -- the only thing putting an item under the cursor for <cr>.
-  if selection.preselect ~= false then
+  if selection.preselect ~= false and known('preselect') then
     opts[#opts + 1] = 'preselect'
   end
   return table.concat(opts, ',')

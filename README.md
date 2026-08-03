@@ -240,6 +240,10 @@ If you want `<CR>` to take the first match whatever produced it, bind
 `select_and_accept` rather than `accept` — the difference between the two is
 exactly this case.
 
+On Neovim 0.12.0 there is no `preselect` flag at all, so *nothing* is ever
+selected while the menu opens by itself, and `select_and_accept` is the only
+binding that accepts anything. `:checkhealth zcmp` says so.
+
 ## Commands
 
 | Command | What it does |

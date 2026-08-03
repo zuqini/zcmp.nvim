@@ -71,6 +71,10 @@ old feel, bind `select_and_accept` rather than `accept`:
 keymap = { preset = 'enter', ['<CR>'] = { 'select_and_accept', 'fallback' } },
 ```
 
+On Neovim 0.12.0 this is not a preference: the `preselect` flag does not
+exist there, so nothing is ever selected and `select_and_accept` is the only
+binding that accepts anything.
+
 **The menu waits.** `completion.trigger.delay_ms` (200 by default) is
 `'autocompletedelay'`: sources do not run until typing pauses for that long,
 which is also what bounds how often a directory is listed and a server asked.

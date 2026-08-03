@@ -68,6 +68,16 @@ local function check_setup()
   end
 
   vim.health.info(("'autocompletedelay' = %d"):format(vim.o.autocompletedelay))
+
+  -- The flag is newer than the 0.12.0 floor, and without it nothing is ever
+  -- selected while the menu opens by itself.
+  if require('zcmp.config').options.completion.list.selection.preselect and not buffer.can_preselect() then
+    vim.health.warn("this Neovim has no `preselect` in 'completeopt'", {
+      'Nothing is selected while `completion.menu.auto_show` is on, so a key',
+      'bound to `accept` never fires. Bind `select_and_accept` instead, or',
+      'update to a Neovim that has the flag.',
+    })
+  end
 end
 
 local function check_sources(bufnr)

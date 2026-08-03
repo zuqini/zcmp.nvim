@@ -10,7 +10,10 @@ describe("'completeopt'", function()
   it('asks for a preselected, uninserted, fuzzy menu with a popup', function()
     config.setup({})
 
-    assert.are.equal('menuone,fuzzy,popup,noinsert,preselect', buffer.completeopt())
+    -- `preselect` is newer than the 0.12.0 floor; the rest has been there for
+    -- releases.
+    local expected = 'menuone,fuzzy,popup,noinsert'
+    assert.are.equal(buffer.can_preselect() and expected .. ',preselect' or expected, buffer.completeopt())
   end)
 
   it('drops the popup when documentation is off', function()
@@ -35,6 +38,18 @@ describe("'completeopt'", function()
     config.setup({ fuzzy = { enabled = false } })
 
     assert.is_nil(buffer.completeopt():find('fuzzy'))
+  end)
+
+  -- The option raises E474 rather than ignoring a flag it does not know, and
+  -- `preselect` is newer than the version floor.
+  it('asks only for flags this Neovim understands', function()
+    config.setup({})
+    local saved = vim.go.completeopt
+
+    assert.has_no.errors(function()
+      vim.go.completeopt = buffer.completeopt()
+    end)
+    vim.go.completeopt = saved
   end)
 end)
 

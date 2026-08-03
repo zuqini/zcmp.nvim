@@ -3,6 +3,11 @@ local helpers = require('helpers')
 
 local ROOT = vim.fn.getcwd()
 
+-- Without `preselect` in 'completeopt' -- Neovim 0.12 has no such flag --
+-- nothing is under the cursor while 'autocomplete' is on, so accepting what a
+-- source marked takes a <C-n> first.
+local SELECT = require('zcmp.buffer').can_preselect() and '' or '<C-n>'
+
 ---@param fragment string
 ---@return table
 local function run(fragment)
@@ -29,7 +34,7 @@ describe('a real menu', function()
       vim.cmd('edit %s/main.txt')
       scenario({
         -- Nothing here presses <C-n>: 'autocomplete' is what opens the menu.
-        { name = 'path', keys = 'i./al', then_keys = '<C-y>' },
+        { name = 'path', keys = 'i./al', then_keys = '%s<C-y>' },
         {
           name = 'word',
           lines = { 'alphabetical', '' },
@@ -39,9 +44,9 @@ describe('a real menu', function()
         },
         { name = 'nothing', keys = 'izzq' },
       }, done)
-    ]]):format(tree()))
+    ]]):format(tree(), SELECT))
 
-    -- The path source marks its first item, so <C-y> alone accepts it.
+    -- The path source marks its first item, so <C-y> accepts it.
     assert.contains(results.path.offered, './alpha.txt')
     assert.are.same({ './alpha.txt' }, results.path.lines)
 
@@ -59,9 +64,9 @@ describe('a real menu', function()
       require('zcmp').setup({ sources = { default = { 'path', 'buffer' } } })
       vim.cmd('edit %s/main.txt')
       scenario({
-        { name = 'anchored', keys = 'ilocal f = ./al', then_keys = '<C-y>' },
+        { name = 'anchored', keys = 'ilocal f = ./al', then_keys = '%s<C-y>' },
       }, done)
-    ]]):format(tree()))
+    ]]):format(tree(), SELECT))
 
     assert.are.same({ 'local f = ./alpha.txt' }, results.anchored.lines)
   end)
@@ -78,13 +83,13 @@ describe('the keys', function()
       vim.o.expandtab = false
       scenario({
         { name = 'indent', keys = 'i<Tab>x', delay = 300 },
-        { name = 'accept', keys = 'i./al', then_keys = '<CR>' },
+        { name = 'accept', keys = 'i./al', then_keys = '%s<CR>' },
         { name = 'newline', keys = 'izzq', then_keys = '<CR>x' },
       }, done)
-    ]]):format(tree()))
+    ]]):format(tree(), SELECT))
 
     assert.are.same({ '\tx' }, results.indent.lines)
-    -- Nothing was selected by hand: 'preselect' is what puts an item under <CR>.
+    -- An item a source marked, accepted by the key bound to `accept`.
     assert.are.same({ './alpha.txt' }, results.accept.lines)
     -- With no menu up, <CR> is a newline again.
     assert.are.same({ 'zzq', 'x' }, results.newline.lines)
@@ -123,9 +128,9 @@ describe('the keys', function()
       vim.cmd('edit %s/main.txt')
       scenario({
         { name = 'fallback', keys = 'izzq', then_keys = '<CR>' },
-        { name = 'accepted', keys = 'i./al', then_keys = '<CR>' },
+        { name = 'accepted', keys = 'i./al', then_keys = '%s<CR>' },
       }, done)
-    ]]):format(tree()))
+    ]]):format(tree(), SELECT))
 
     -- No menu, so <CR> reaches the mapping that was already there.
     assert.are.same({ 'zzqPAIRED' }, results.fallback.lines)
