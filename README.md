@@ -278,10 +278,15 @@ default:
 snippets = {
   name = 'Snippets',
   module = 'zsnip.complete',
-  -- zcmp owns 'complete'; zsnip caps and documents for itself.
-  opts = { complete = false, documentation = false, limit = 30 },
+  -- ZCmp owns 'complete', so zsnip is told not to append itself to it.
+  opts = { complete = false },
 },
 ```
+
+That one key is the whole of the coordination. Everything else about
+snippets — how many are offered, whether they carry documentation — is
+configured in [zsnip's own `setup()`](https://github.com/zuqini/zsnip.nvim),
+where the rest of zsnip is.
 
 It is a default, not a dependency. The provider is a `module` like any other,
 so any snippet plugin exposing `source()` or `completefunc()` takes its place

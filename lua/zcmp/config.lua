@@ -29,8 +29,10 @@ local DEFAULTS = {
       snippets = {
         name = 'Snippets',
         module = 'zsnip.complete',
-        -- zcmp owns 'complete'; zsnip caps and documents for itself.
-        opts = { complete = false, documentation = false, limit = 30 },
+        -- The one key that is coordination rather than preference: buffer.lua
+        -- is the single writer of 'complete', so zsnip must not append itself.
+        -- How snippets are capped and documented is zsnip's setup() to say.
+        opts = { complete = false },
       },
       buffer = {
         name = 'Buffer',

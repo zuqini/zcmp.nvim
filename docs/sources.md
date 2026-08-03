@@ -165,8 +165,7 @@ path = {
 
 `path`'s cap is its own rather than `max_items` at the provider level, because
 truncating before the items are built is strictly less work than `'complete'`'s
-`^{count}` truncating after. Same reason the `snippets` provider passes
-zsnip a `limit`.
+`^{count}` truncating after.
 
 ## Snippets
 
@@ -188,11 +187,16 @@ by default:
 snippets = {
   name = 'Snippets',
   module = 'zsnip.complete',
-  -- zcmp owns 'complete', so zsnip is told not to append itself to it; zsnip
-  -- caps and documents for itself.
-  opts = { complete = false, documentation = false, limit = 30 },
+  -- ZCmp owns 'complete', so zsnip is told not to append itself to it.
+  opts = { complete = false },
 },
 ```
+
+That one key is the whole of the coordination, and it is the only opinion
+these `opts` hold. How many snippets are offered and whether they carry
+documentation is zsnip's own `setup()` to decide; anything else put in `opts`
+here is handed to zsnip verbatim and overrides that `setup()` for this source
+alone.
 
 Nothing else is needed — register a loader and the snippets are in the menu:
 

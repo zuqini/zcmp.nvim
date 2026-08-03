@@ -87,12 +87,12 @@ Most of this file was ported with the code from a Neovim config's `lua/plugins/l
 - `vim.fn.expand('~root/')` does resolve it correctly (`/var/root/`), but `expand()` also applies wildcards, `%`, `#` and `$VAR`, and the token character class admits `$` -- so routing paths through it makes `$HOME/f` and a stray `%` expand as a side effect of a fix for a form of path that modern systems barely have. Not worth the surface.
 - Revisit when: `vim.fs.normalize` handles `~user` (it would then be a one-word change), or a user asks for it.
 
-## The snippets provider passes `limit` in `opts`, not `max_items`
+## The snippets provider's default `opts` carry only `complete = false`
 
-- Flagged: every other built-in provider caps with `max_items`; the `snippets` one puts `limit = 30` in `opts` instead. Looks like an oversight.
+- Flagged (originally): every other built-in provider caps with `max_items`; the `snippets` one carried `limit = 30` in `opts` instead. Looks like an oversight.
 - Anchor: `lua/zcmp/config.lua` — the `snippets` provider
-- Decision: `max_items` becomes core's `^{count}`, which truncates *after* the source has answered. zsnip takes a `limit` and truncates before it builds the items, so passing it there is strictly less work for the same menu. `opts` is documented as going to the provider module verbatim, which is exactly this case.
-- The asymmetry is real and correct: for paths and buffers zcmp (or core) *is* the source, so it enforces; for snippets zsnip is the source, so it enforces and zcmp only asks.
+- Decision (revised 2026-08): the default passes **no** `limit` and no `documentation` at all. zsnip resolves a `nil` field from its own `setup()`, so an explicit value here silently overrode the place a user actually configures snippets — `documentation = false` also fought zcmp's own `completion.documentation.auto_show = true`. Preferences belong to zsnip; the one key zcmp keeps is `complete = false`, which is coordination, not preference: `buffer.lua` is the single writer of `'complete'`, so zsnip must not append itself.
+- A user who *does* want a per-source override may still put `limit`/`documentation` in `opts` — they go to the module verbatim and beat zsnip's `setup()`, which is why the default must not use them. Do not re-flag the remaining asymmetry with `max_items`: `max_items` is core's `^{count}`, truncating after the source answers; a `limit` in `opts` truncates before the items are built.
 
 ## The `lsp` provider is the one wired by name from the buffer layer
 

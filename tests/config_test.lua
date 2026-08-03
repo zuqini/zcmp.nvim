@@ -113,7 +113,6 @@ describe('config', function()
     local opts = config.options.sources.providers.snippets.opts
     assert.are.equal(5, opts.limit)
     assert.is_false(opts.complete)
-    assert.is_false(opts.documentation)
   end)
 
   -- `{ 'lsp', want_snippets and 'snippets' or nil, 'buffer' }` is a table with
