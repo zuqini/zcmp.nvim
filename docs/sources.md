@@ -1,0 +1,170 @@
+# Sources and providers
+
+A source in ZCmp is an entry in `'complete'`. That is the whole abstraction:
+there is no provider protocol of ZCmp's own, no async contract, no scoring
+callback. Core collects the sources, fuzzy-matches across all of them, ranks
+the result and time-slices the slow ones.
+
+## The provider table
+
+```lua
+require('zcmp').setup({
+  sources = {
+    default = { 'lsp', 'path', 'snippets', 'buffer' },
+    providers = {
+      example = {
+        name = 'Example',     -- shown by :ZCmp status and :checkhealth zcmp
+        flags = { '.', 'w' }, -- literal 'complete' flags
+        module = 'my.source', -- a module serving matches; see below
+        opts = {},            -- passed verbatim to the module
+        max_items = 100,      -- applied as 'complete's own ^{count} cap
+        enabled = true,       -- boolean, or fun(bufnr): boolean
+        available = function(bufnr) return true end,
+      },
+    },
+  },
+})
+```
+
+A provider needs `flags`, `module`, or both. Everything else is optional.
+
+- **`flags`** are written into `'complete'` as they stand, so anything the
+  option understands is a provider: `kspell` for the spell file, `t` for tags,
+  `k/usr/share/dict/words` for a dictionary, `i` for included files. See
+  `:help 'complete'`.
+- **`enabled`** is asked once per resolve; **`available`** is asked per buffer,
+  after it. The built-in `lsp` provider uses `available` to keep the omnifunc
+  out of `'complete'` until a server that answers completion is attached.
+- **`max_items`** becomes `^{count}` on every entry the provider contributes,
+  which is core's own per-source cap. `completion.list.max_items` is the
+  default for providers that set none.
+
+## Writing a provider module
+
+A module is a source if it has either of:
+
+- **`source(opts)` → `string`** — the `'complete'` entry to use, for a module
+  that knows its own (zsnip's `zsnip.complete.source()` is one).
+- **`completefunc(findstart, base)`** — a `'complete'` function, in which case
+  ZCmp writes the entry itself.
+
+If the module also has **`enable(opts)`**, it is called once, with the
+provider's `opts`, the first time the provider joins a buffer's source list.
+
+That is the entire contract. A working source, in full:
+
+```lua
+-- lua/my/source.lua
+local M = {}
+
+local WORDS = { 'alpha', 'beta', 'gamma' }
+
+---@param findstart 0|1
+---@return integer|table
+function M.completefunc(findstart)
+  local col = vim.api.nvim_win_get_cursor(0)[2]
+  local before = vim.api.nvim_get_current_line():sub(1, col)
+
+  if findstart == 1 then
+    -- Where the text this source replaces begins. -2 keeps completion mode
+    -- alive with nothing to offer; -3 would leave it, taking the other
+    -- sources with it.
+    local start = before:match('()%w*$')
+    return start and start - 1 or -2
+  end
+
+  local words = {}
+  for _, word in ipairs(WORDS) do
+    words[#words + 1] = { word = word, kind = 'Text' }
+  end
+  -- Without 'always', Vim narrows the list it was handed by prefix as you
+  -- type, rather than asking again.
+  return { words = words, refresh = 'always' }
+end
+
+return M
+```
+
+```lua
+require('zcmp').setup({
+  sources = {
+    default = { 'lsp', 'mine', 'buffer' },
+    providers = { mine = { name = 'Mine', module = 'my.source', max_items = 20 } },
+  },
+})
+```
+
+`:help complete-functions` is the reference for what `completefunc` may
+return, and `:help complete-items` for the shape of each match.
+
+### Two things that are easy to get wrong
+
+- **Answer from the live line, not from `base`.** `base` is the text located
+  in the *first* call of a completion cycle. On a `refresh = 'always'`
+  re-invocation it is not re-derived, so it goes stale the moment you type.
+  Read the cursor and the line instead.
+- **Mark the first item `preselect = 1`** if you want it under the cursor.
+  `'autocomplete'` forces `noselect` on, and `preselect` in `'completeopt'`
+  only selects items a source asked for.
+
+## Where each source starts
+
+The reason `'complete'` matters more than it looks: a function source picks
+its own start column, and different sources in the same menu may pick
+different ones. A path source anchors at `./al`, a snippet source at the whole
+`<div` run, and core's scanners at the keyword — all in one menu, all
+replacing the right thing on accept.
+
+`vim.fn.complete()`, which every completion plugin built before 0.12 has to
+use, takes one start column for the entire menu. That is the constraint this
+plugin exists to be free of.
+
+## Per-filetype lists
+
+```lua
+require('zcmp').setup({
+  sources = {
+    default = { 'lsp', 'path', 'snippets', 'buffer' },
+    per_filetype = {
+      -- Replaces the default list for markdown:
+      markdown = { 'path', 'buffer', 'spell' },
+      -- Adds to it for lua:
+      lua = { inherit_defaults = true, 'lazydev' },
+    },
+  },
+})
+```
+
+`zcmp.add_filetype_source(filetype, ids)` does the second form from Lua.
+
+## Snippets
+
+The `snippets` provider is [zsnip.nvim](https://github.com/zuqini/zsnip.nvim)'s
+own `'complete'` source, configured like this by default:
+
+```lua
+snippets = {
+  name = 'Snippets',
+  module = 'zsnip.complete',
+  -- zcmp owns 'complete', so zsnip is told not to append itself to it; zsnip
+  -- caps and documents for itself.
+  opts = { complete = false, documentation = false, limit = 30 },
+},
+```
+
+Nothing else is needed — register a loader and the snippets are in the menu:
+
+```lua
+require('zsnip').setup()
+require('zsnip.loaders.from_vscode').lazy_load()
+require('zsnip.loaders.from_snipmate').lazy_load()
+require('zcmp').setup()
+```
+
+Do not also call `require('zsnip.complete').enable()` or
+`require('zsnip').start_lsp_server()`: either one offers every snippet a
+second time. `:checkhealth zsnip` says so if you do.
+
+If a provider's module is missing — zsnip not installed, say — the provider
+contributes nothing and every other source still resolves. `:ZCmp status` and
+`:checkhealth zcmp` name it.

@@ -1,0 +1,8 @@
+return {
+  default = {
+    ROOT = { 'tests' },
+    -- Each tests/*_test.lua is a native busted spec. The pattern is anchored
+    -- so shared modules (helpers.lua) are not discovered as specs.
+    pattern = '_test%.lua$',
+  },
+}
