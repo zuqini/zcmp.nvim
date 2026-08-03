@@ -426,8 +426,8 @@ zcmp.version            The plugin's version, as a string.
 11. HEALTH                                                        *zcmp-health*
 
 `:checkhealth zcmp` answers the questions an empty menu raises: whether the
-engine is enabled and its options are still the ones it set, whether this
-buffer is one ZCmp drives, which sources answered for it and which could not
+engine is enabled and its options are still the ones it set, whether the
+buffer it was called from is one ZCmp drives, which sources answered for it and which could not
 -- a provider whose module is not installed says so by name -- and whether
 another completion engine is loaded alongside, which is the failure that
 looks like every other failure.

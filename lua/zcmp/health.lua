@@ -102,7 +102,8 @@ local function check_sources(bufnr)
 end
 
 local function check_buffer(bufnr)
-  vim.health.start('This buffer')
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  vim.health.start(('Buffer %d%s'):format(bufnr, name ~= '' and ' — ' .. vim.fn.fnamemodify(name, ':~:.') or ''))
 
   if not buffer.attached(bufnr) then
     vim.health.warn('zcmp is not attached here', {
@@ -166,9 +167,22 @@ local function check_bug_report()
   }, '\n'))
 end
 
+---`:checkhealth` runs the check inside its own `nofile` buffer, which zcmp
+---never drives -- reporting on that one would warn every time. The alternate
+---buffer is the one it was called from.
+---@return integer
+local function subject()
+  local alternate = vim.fn.bufnr('#')
+  if alternate ~= -1 and vim.api.nvim_buf_is_valid(alternate) and vim.bo[alternate].buftype == '' then
+    return alternate
+  end
+  return vim.api.nvim_get_current_buf()
+end
+
 ---Entry point for `:checkhealth zcmp`.
-function M.check()
-  local bufnr = vim.api.nvim_get_current_buf()
+---@param bufnr? integer Defaults to the buffer checkhealth was called from
+function M.check(bufnr)
+  bufnr = bufnr or subject()
   check_environment()
   check_setup()
   check_sources(bufnr)

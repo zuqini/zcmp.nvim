@@ -47,14 +47,12 @@ describe(':checkhealth zcmp', function()
     local report = recorder()
     require('zcmp.health').check()
 
-    assert.are.same({
-      'Environment',
-      'Setup',
-      'Sources',
-      'This buffer',
-      'Other completion engines',
-      'Reporting a bug',
-    }, report.sections)
+    local sections = report.sections
+    assert.are.equal(6, #sections)
+    assert.are.same({ 'Environment', 'Setup', 'Sources' }, { sections[1], sections[2], sections[3] })
+    -- The fourth names the buffer it reported on.
+    assert.is_not_nil(sections[4]:match('^Buffer %d+'))
+    assert.are.same({ 'Other completion engines', 'Reporting a bug' }, { sections[5], sections[6] })
   end)
 
   it('carries the version, so a bug report says which zcmp it is about', function()
@@ -110,12 +108,25 @@ describe(':checkhealth zcmp', function()
   it('warns when a buffer is not one zcmp drives', function()
     require('zcmp').setup({})
     local scratch = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_set_current_buf(scratch)
+
+    local report = recorder()
+    require('zcmp.health').check(scratch)
+
+    assert.are.equal('warn', entry(report, 'not attached here').kind)
+  end)
+
+  -- :checkhealth runs inside its own nofile buffer, which zcmp never drives.
+  it('reports on the buffer it was called from, not the checkhealth one', function()
+    require('zcmp').setup({ sources = { default = { 'buffer' } } })
+    local editing = helpers.buffer()
+    helpers.settle(editing)
+    vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(false, true))
 
     local report = recorder()
     require('zcmp.health').check()
 
-    assert.are.equal('warn', entry(report, 'not attached here').kind)
+    assert.are.equal(('Buffer %d'):format(editing), report.sections[4])
+    assert.are.equal('ok', entry(report, "'complete' = ").kind)
   end)
 
   -- Two engines writing 'complete' and mapping <Tab> is the failure that looks
