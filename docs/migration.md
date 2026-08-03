@@ -25,7 +25,8 @@ require('zcmp').setup(opts)
 | `completion.documentation.auto_show` | same (becomes `popup` in `'completeopt'`) |
 | `completion.list.max_items` | same (becomes each source's `^{count}`) |
 | `completion.list.selection.preselect` / `.auto_insert` | same (become `preselect` / `noinsert`) |
-| `snippets.preset` and the `expand` / `active` / `jump` overrides | same |
+| `snippets.active` / `snippets.jump` | same |
+| `snippets.preset` / `snippets.expand` | accepted, never called — whatever inserts the snippet expands it. `setup()` says so; see [api.md](api.md#snippets) |
 | `signature.enabled` | same, but manual only — see below |
 | `get_lsp_capabilities(override)` | same |
 | `add_filetype_source(ft, ids)` | same |

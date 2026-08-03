@@ -90,6 +90,21 @@ local function modes(entry)
   return { 'i' }
 end
 
+---A name resolves against |zcmp-commands| only. The predicates live in the
+---same module and answer a question rather than doing anything, so binding one
+---would swallow the key; naming one is the same mistake as a typo.
+---@param command zcmp.Command
+---@return function?
+local function resolve_command(command)
+  if type(command) == 'function' then
+    return command
+  end
+  if commands.predicates[command] then
+    return nil
+  end
+  return commands[command]
+end
+
 ---@param mode string
 ---@param lhs string
 ---@param entry zcmp.Command[]
@@ -100,7 +115,7 @@ local function run(mode, lhs, entry, captured)
       return fallback.run(mode, lhs, captured[mode .. lhs])
     end
 
-    local fn = type(command) == 'function' and command or commands[command]
+    local fn = resolve_command(command)
     if type(fn) ~= 'function' then
       vim.notify_once(('zcmp: %q is not a keymap command'):format(tostring(command)), vim.log.levels.WARN)
     else

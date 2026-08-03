@@ -18,7 +18,7 @@ that — which is the part everyone actually installs a completion plugin for.
 
 ZCmp is that layer and nothing more. There is no engine here: no matcher of
 its own, no menu drawing, no scoring, no binary to build. What you get is one
-blink.cmp-shaped table over the seven options and two APIs that already do the
+blink.cmp-shaped table over the six options and two APIs that already do the
 work.
 
 | | Engine | Menu | Sources | Ships |
@@ -159,7 +159,9 @@ before ZCmp attached — a buffer-local mapping, a plugin's global one, or the
 built-in behaviour of the key. That is how `<Tab>` still indents, `<CR>` still
 opens a line, and an autopair plugin still pairs.
 
-An entry may also be a function, which is handed the API:
+An entry may also be a function, which is handed the commands table
+(`require('zcmp.api')` — the list in [docs/api.md](docs/api.md), not the
+module's `setup`/`enable`/`reload`):
 
 ```lua
 ['<C-l>'] = {
@@ -211,8 +213,9 @@ require('zcmp').setup({
   fuzzy = { enabled = true },             -- `fuzzy` in 'completeopt'
 
   snippets = {
-    preset = 'default',                   -- vim.snippet; override the three
-    expand = function(body) vim.snippet.expand(body) end,
+    preset = 'default',                   -- accepted, never called
+    expand = function(body) vim.snippet.expand(body) end,   -- likewise
+    -- These two are the ones another engine substitutes:
     active = function(filter) return vim.snippet.active(filter) end,
     jump = function(direction) vim.snippet.jump(direction) end,
   },

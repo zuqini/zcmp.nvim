@@ -47,6 +47,12 @@ local function resolve_dir(dir)
   end
 
   local name = api.nvim_buf_get_name(0)
+  -- A buffer a plugin backs rather than a file ('oil://', 'term://') has no
+  -- directory to be relative to, and vim.fs.dirname would answer with a root
+  -- made out of the scheme.
+  if name:find('^%a[%w+.%-]*://') then
+    name = ''
+  end
   local root = name ~= '' and vim.fs.dirname(name) or vim.uv.cwd()
   return root and root .. '/' .. dir or nil
 end
@@ -62,12 +68,19 @@ end
 local function split(before)
   local token = before:sub(-MAX_TOKEN):match('[%w%._%-%+@~$/\128-\255]*$')
   local dir = token:match('^(.*/)')
-  -- A comment marker ('//'), a division ('a /'), or a url scheme -- not a path
-  -- worth listing '/' for.
-  if not dir or dir:find('//', 1, true) or not dir:sub(1, -2):match('[^/]') then
+  -- A comment marker ('-- //') or a url scheme ('https://') puts a '/' in the
+  -- line without putting the cursor in a path.
+  if not dir or dir:find('//', 1, true) then
     return nil
   end
-  return dir, token:sub(#dir + 1)
+  local segment = token:sub(#dir + 1)
+  -- A bare '/' with nothing yet typed after it is a division ('x = a /'). A
+  -- root-level path is the same token plus a character, so this costs one
+  -- keystroke and nothing else.
+  if dir == '/' and segment == '' then
+    return nil
+  end
+  return dir, segment
 end
 
 ---@return integer? col 0-based start of the path token, nil outside one

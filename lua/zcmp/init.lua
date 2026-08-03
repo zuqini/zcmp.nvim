@@ -19,7 +19,6 @@ local api = require('zcmp.api')
 local appearance = require('zcmp.appearance')
 local buffer = require('zcmp.buffer')
 local config = require('zcmp.config')
-local sources = require('zcmp.sources')
 
 local M = {}
 
@@ -35,34 +34,32 @@ local enabled = false
 local function autocmds()
   local group = vim.api.nvim_create_augroup(GROUP, { clear = true })
 
-  vim.api.nvim_create_autocmd('BufEnter', {
+  -- FileType because `sources.per_filetype` is keyed off it and `:setfiletype`
+  -- can follow the buffer being entered; the LSP hooks because a client
+  -- arriving or leaving changes both what 'complete' should say and whether
+  -- |vim.lsp.completion| belongs on the buffer.
+  vim.api.nvim_create_autocmd({ 'BufEnter', 'FileType', 'LspAttach', 'LspDetach' }, {
     group = group,
     callback = function(args)
       buffer.attach(args.buf)
     end,
   })
 
-  vim.api.nvim_create_autocmd('LspAttach', {
+  -- Nothing else drops a buffer's entry, and a long session opens a great many.
+  vim.api.nvim_create_autocmd({ 'BufDelete', 'BufWipeout' }, {
     group = group,
     callback = function(args)
-      local client = vim.lsp.get_client_by_id(args.data.client_id)
-      if client and sources.wants(args.buf, 'lsp') then
-        require('zcmp.lsp').attach(client, args.buf)
-      end
-      buffer.attach(args.buf)
+      buffer.detach(args.buf)
     end,
   })
 
-  -- The buffer may have just lost its last completion provider, leaving 'o'
-  -- with nothing to answer.
-  vim.api.nvim_create_autocmd('LspDetach', {
+  vim.api.nvim_create_autocmd('ColorScheme', {
     group = group,
-    callback = function(args)
-      buffer.attach(args.buf)
+    callback = function()
+      appearance.forget()
+      appearance.apply()
     end,
   })
-
-  vim.api.nvim_create_autocmd('ColorScheme', { group = group, callback = appearance.apply })
 end
 
 ---Optional in the sense that every default works -- but nothing is wired up
@@ -75,7 +72,12 @@ function M.setup(opts)
 end
 
 ---Take over completion: options, autocmds, and every buffer already open.
+---
+---Detaches first, so that a second |zcmp.setup()| re-derives the mappings as
+---well as the options -- a buffer already attached is one `wire()` leaves the
+---keymaps of alone.
 function M.enable()
+  buffer.detach_all()
   appearance.apply()
   buffer.apply_globals()
   autocmds()
@@ -84,11 +86,13 @@ function M.enable()
 end
 
 ---Hand completion back: mappings are removed, the options ZCmp set are
----restored, and buffers keep whatever 'complete' they had before.
+---restored, buffers keep whatever 'complete' they had before, and every
+---client ZCmp switched |vim.lsp.completion| on for is switched back.
 function M.disable()
   pcall(vim.api.nvim_del_augroup_by_name, GROUP)
   buffer.detach_all()
   buffer.restore_globals()
+  appearance.restore()
   enabled = false
 end
 
@@ -100,36 +104,35 @@ end
 ---Re-read the source list everywhere, and start any provider module that has
 ---arrived since. What `:ZCmp reload` runs.
 function M.reload()
-  sources.reset()
+  require('zcmp.sources').reset()
   buffer.detach_all()
   buffer.attach_all()
 end
 
+---Re-derive 'complete' where the source list has just changed underneath it.
+local function refresh()
+  if enabled then
+    buffer.attach_all()
+  end
+end
+
 ---Register a provider. It serves nothing until a `sources.default` or
----`sources.per_filetype` list names it; see |zcmp-providers|.
+---`sources.per_filetype` list names it; see |zcmp-providers|. Order-free: a
+---call before |zcmp.setup()| survives it.
 ---@param id string
 ---@param provider zcmp.Provider
 function M.add_source_provider(id, provider)
-  config.options.sources.providers[id] = provider
+  config.add_provider(id, provider)
+  refresh()
 end
 
 ---Add providers to one filetype's list, on top of `sources.default`.
+---Order-free: a call before |zcmp.setup()| survives it.
 ---@param filetype string
 ---@param ids string|string[]
 function M.add_filetype_source(filetype, ids)
-  local per_filetype = config.options.sources.per_filetype
-  local list = per_filetype[filetype]
-  if not list then
-    list = { inherit_defaults = true }
-    per_filetype[filetype] = list
-  end
-  ---@type string[]
-  local adding = type(ids) == 'table' and ids or { ids }
-  for _, id in ipairs(adding) do
-    if not vim.tbl_contains(list, id) then
-      list[#list + 1] = id
-    end
-  end
+  config.add_filetype_source(filetype, ids)
+  refresh()
 end
 
 ---Capabilities to hand a language server.

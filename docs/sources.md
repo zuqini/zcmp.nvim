@@ -137,6 +137,33 @@ require('zcmp').setup({
 
 `zcmp.add_filetype_source(filetype, ids)` does the second form from Lua.
 
+## The built-in providers' `opts`
+
+The `lsp` and `path` providers take `opts` of their own:
+
+```lua
+lsp = {
+  -- Ask the server again on every trigger character, through
+  -- vim.lsp.completion. Both delivery paths are on by default because each
+  -- covers what the other misses.
+  autotrigger = true,
+  -- Widen the server's declared triggerCharacters to every letter, which is
+  -- what makes autotrigger fire on a plain keyword at all. Turn it off for a
+  -- server that misbehaves under a widened list; autotrigger then only fires
+  -- on the characters the server asked for.
+  extend_trigger_characters = true,
+},
+
+path = {
+  max_items = 250, -- entries listed per request
+},
+```
+
+`path`'s cap is its own rather than `max_items` at the provider level, because
+truncating before the items are built is strictly less work than `'complete'`'s
+`^{count}` truncating after. Same reason the `snippets` provider passes
+zsnip a `limit`.
+
 ## Snippets
 
 The `snippets` provider is [zsnip.nvim](https://github.com/zuqini/zsnip.nvim)'s

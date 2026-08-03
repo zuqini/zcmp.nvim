@@ -55,6 +55,47 @@ describe(':checkhealth zcmp', function()
     assert.are.same({ 'Other completion engines', 'Reporting a bug' }, { sections[5], sections[6] })
   end)
 
+  -- A provider may declare both `flags` and a `module`; the flags still serve
+  -- when the module is missing, and a plain tick hides the one thing
+  -- checkhealth is here to find.
+  it('names the problem of a source that is serving anyway', function()
+    require('zcmp').setup({
+      sources = {
+        default = { 'half' },
+        providers = { half = { name = 'Half', flags = { '.' }, max_items = 100, module = 'no_such_module' } },
+      },
+    })
+    local bufnr = helpers.buffer()
+    helpers.settle(bufnr)
+
+    local report = recorder()
+    require('zcmp.health').check(bufnr)
+
+    local found = entry(report, 'not on the runtimepath')
+    assert.are.equal('warn', found.kind)
+    assert.is_true(found.message:find('.^100', 1, true) ~= nil)
+  end)
+
+  -- list() is the report path, and it used to run the provider module's
+  -- enable(): running :checkhealth reconfigured the plugin it was reporting on.
+  it('starts no provider module of its own', function()
+    local started = 0
+    helpers.stub(package.loaded, 'fake_source', {
+      completefunc = function() end,
+      enable = function()
+        started = started + 1
+      end,
+    })
+    require('zcmp.config').setup({
+      sources = { default = { 'fake' }, providers = { fake = { module = 'fake_source' } } },
+    })
+
+    recorder()
+    require('zcmp.health').check(helpers.buffer())
+
+    assert.are.equal(0, started)
+  end)
+
   it('carries the version, so a bug report says which zcmp it is about', function()
     local report = recorder()
     require('zcmp.health').check()

@@ -62,6 +62,11 @@ Add one or more providers to a filetype's list, on top of `sources.default`.
 require('zcmp').add_filetype_source('markdown', 'spell')
 ```
 
+Both are order-free: a call before `setup()` survives it (`setup()` replaces
+the resolved options, and registrations go underneath, so an explicit `opts`
+still wins), and a call after it re-derives `'complete'` in every attached
+buffer.
+
 ### `zcmp.get_lsp_capabilities(override?)` → `lsp.ClientCapabilities`
 
 Capabilities to hand a language server. ZCmp completes through core, so these
@@ -111,7 +116,13 @@ see [the note in the README](../README.md#one-thing-worth-knowing-about-preselec
 | `is_snippet_active(filter?)` / `snippet_active(filter?)` | — | — |
 
 All of them go through `config.snippets`, so an engine other than
-`vim.snippet` is three functions away.
+`vim.snippet` is two functions away: `snippets.active` and `snippets.jump`.
+
+`snippets.expand` and `snippets.preset` are blink.cmp's names, accepted so a
+config moves over unedited and never called — whatever put the snippet in the
+buffer expanded it, which is zsnip for a snippet source and
+`vim.lsp.completion` (through `vim.snippet.expand`) for a server's. Setting
+either is reported by `setup()` rather than ignored.
 
 ### Documentation
 

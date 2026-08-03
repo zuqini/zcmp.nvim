@@ -86,10 +86,105 @@ describe('config', function()
     assert.are.equal('enter', config.options.keymap.preset)
   end)
 
+  -- An empty list is the same instruction as a short one, and the only way to
+  -- say "nothing here"; `:checkhealth zcmp` reports it as the error it is.
+  it('takes an empty list as a real choice of no sources', function()
+    config.setup({ sources = { default = {} } })
+
+    assert.are.same({}, config.options.sources.default)
+  end)
+
+  -- `{}` and an empty list are the same shape, so the default has to decide:
+  -- over a map it means "nothing to say", not "wipe it".
+  it('leaves a map alone when handed an empty table', function()
+    config.setup({ sources = { providers = {} }, completion = { menu = {} } })
+
+    assert.is_not_nil(config.options.sources.providers.path)
+    assert.is_true(config.options.completion.menu.auto_show)
+  end)
+
+  it('does not keep a reference to the table it was handed', function()
+    local per_filetype = { markdown = { 'path' } }
+    config.setup({ sources = { per_filetype = per_filetype } })
+
+    config.add_filetype_source('markdown', 'buffer')
+
+    assert.are.same({ 'path' }, per_filetype.markdown)
+  end)
+
+  it('reports the defaults it accepts but never calls', function()
+    local notified = helpers.notifications(function()
+      config.setup({ snippets = { expand = function() end, preset = 'luasnip' } })
+    end)
+
+    assert.is_true(helpers.notified(notified, 'snippets.expand is never called'))
+    assert.is_true(helpers.notified(notified, 'is not a snippets preset'))
+  end)
+
+  it('says nothing about the snippets preset it does have', function()
+    local notified = helpers.notifications(function()
+      config.setup({ snippets = { preset = 'default' } })
+    end)
+
+    assert.are.equal(0, #notified)
+  end)
+
   it('restores the defaults', function()
     config.setup({ sources = { default = { 'buffer' } } })
     config.reset()
 
     assert.are.same({ 'lsp', 'path', 'snippets', 'buffer' }, config.options.sources.default)
+  end)
+end)
+
+-- A plugin registering a source from its own config block runs before the
+-- user's setup() as often as after, and setup() replaces `options` wholesale.
+describe('registering outside setup()', function()
+  it('keeps a provider registered before setup() ran', function()
+    config.add_provider('spell', { flags = { 'kspell' } })
+    config.setup({ sources = { default = { 'spell' } } })
+
+    assert.are.same({ 'kspell' }, config.options.sources.providers.spell.flags)
+  end)
+
+  it('keeps a filetype source registered before setup() ran', function()
+    config.add_filetype_source('markdown', { 'path' })
+    config.setup({})
+
+    local markdown = config.options.sources.per_filetype.markdown
+    assert.are.same({ 'path' }, { unpack(markdown) })
+    assert.is_true(markdown.inherit_defaults)
+  end)
+
+  it('lets an explicit setup() win over an earlier registration', function()
+    config.add_provider('spell', { flags = { 'kspell' } })
+    config.setup({ sources = { providers = { spell = { flags = { 'k/usr/share/dict/words' } } } } })
+
+    assert.are.same({ 'k/usr/share/dict/words' }, config.options.sources.providers.spell.flags)
+  end)
+
+  it('takes effect straight away when setup() has already run', function()
+    config.setup({})
+    config.add_provider('spell', { flags = { 'kspell' } })
+    config.add_filetype_source('markdown', 'spell')
+
+    assert.is_not_nil(config.options.sources.providers.spell)
+    assert.contains(config.options.sources.per_filetype.markdown, 'spell')
+  end)
+
+  it('names a provider once, however often it is added', function()
+    config.add_filetype_source('markdown', 'path')
+    config.add_filetype_source('markdown', { 'path', 'buffer' })
+    config.setup({})
+
+    assert.are.same({ 'path', 'buffer' }, { unpack(config.options.sources.per_filetype.markdown) })
+  end)
+
+  it('forgets registrations on reset', function()
+    config.add_provider('spell', { flags = { 'kspell' } })
+    config.reset()
+    config.setup({})
+
+    assert.is_nil(config.options.sources.providers.spell)
   end)
 end)

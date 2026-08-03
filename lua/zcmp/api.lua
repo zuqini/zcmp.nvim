@@ -9,6 +9,18 @@ local config = require('zcmp.config')
 
 local M = {}
 
+---Questions rather than commands. A keymap entry naming one would swallow the
+---key on a truthy answer without doing anything, so |zcmp.keymap| declines
+---them; everything else this module exports is a command.
+M.predicates = {
+  is_visible = true,
+  is_menu_visible = true,
+  is_snippet_active = true,
+  snippet_active = true,
+  is_documentation_visible = true,
+  is_signature_visible = true,
+}
+
 ---A key is being translated into other keys, so they go in front of whatever
 ---is already queued -- the 'i' flag. Without it a mapping fed from a macro or
 ---from |feedkeys()| lands after the rest of the sequence.
@@ -37,10 +49,13 @@ local function snippets()
   return config.options.snippets
 end
 
+---Scoped to the buffer the accept happens in: a one-shot that never fires --
+---an accept core answers with no CompleteDone -- otherwise stays armed for
+---somebody else's completion, anywhere.
 ---@param opts? { callback?: fun() }
 local function on_accept(opts)
   if opts and opts.callback then
-    api.nvim_create_autocmd('CompleteDone', { once = true, callback = opts.callback })
+    api.nvim_create_autocmd('CompleteDone', { buffer = 0, once = true, callback = opts.callback })
   end
 end
 

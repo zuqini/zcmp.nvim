@@ -41,6 +41,14 @@ local function start(bufnr)
   return assert(vim.lsp.get_client_by_id(id))
 end
 
+---vim.lsp.completion has no "is it on" to ask. Its autotrigger is an
+---InsertCharPre autocmd on the buffer, and nothing else installs one here.
+---@param bufnr integer
+---@return integer
+local function autotriggers(bufnr)
+  return #vim.api.nvim_get_autocmds({ event = 'InsertCharPre', buffer = bufnr })
+end
+
 local function stop()
   for _, client in ipairs(vim.lsp.get_clients()) do
     client:stop()
@@ -143,6 +151,48 @@ describe('attaching a client', function()
       return vim.bo[bufnr].complete == '.^100,w^100,b^100'
     end)
     assert.are.equal('.^100,w^100,b^100', vim.bo[bufnr].complete)
+  end)
+
+  -- The one thing disable() exists to stop was the only thing surviving it:
+  -- core's InsertCharPre hook stayed installed and every letter still opened
+  -- the menu, in a buffer whose 'complete' and mappings had all been given
+  -- back.
+  it('switches vim.lsp.completion back off, and puts the trigger list back', function()
+    local bufnr = helpers.buffer()
+    vim.api.nvim_set_current_buf(bufnr)
+    require('zcmp').setup({ sources = { default = { 'lsp', 'buffer' } } })
+
+    local client = start(bufnr)
+    helpers.settle(bufnr)
+    vim.wait(500, function()
+      return vim.bo[bufnr].complete:find('o,', 1, true) ~= nil
+    end)
+    assert.contains(client.server_capabilities.completionProvider.triggerCharacters, 'a')
+    assert.are.equal(1, autotriggers(bufnr))
+
+    require('zcmp').disable()
+
+    assert.are.equal(0, autotriggers(bufnr))
+    assert.are.same({ '.' }, client.server_capabilities.completionProvider.triggerCharacters)
+  end)
+
+  -- A buffer ZCmp declines to drive must not get vim.lsp.completion either:
+  -- the widened trigger list lives on the client, so it leaks out of the
+  -- buffer that widened it into every other one that client serves.
+  it('leaves a client alone in a buffer the enabled check rejects', function()
+    local bufnr = helpers.buffer()
+    vim.api.nvim_set_current_buf(bufnr)
+    require('zcmp').setup({
+      enabled = function()
+        return false
+      end,
+      sources = { default = { 'lsp', 'buffer' } },
+    })
+
+    local client = start(bufnr)
+    vim.wait(200)
+
+    assert.are.same({ '.' }, client.server_capabilities.completionProvider.triggerCharacters)
   end)
 
   it('leaves a client alone when the source list does not name lsp', function()

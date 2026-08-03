@@ -57,10 +57,29 @@ describe('the path source', function()
   -- without putting the cursor in a path.
   it('leaves comment markers, division and url schemes alone', function()
     local dir = tree()
-    for i, line in ipairs({ '-- // note', 'local x = a / ', 'https://example.com/a' }) do
+    for i, line in ipairs({ '-- // note', 'local x = a / ', 'local x = a /', 'https://example.com/a' }) do
       helpers.buffer({ line }, ('%s/main%d.lua'):format(dir, i))
       assert.is_nil(path.start(), line)
     end
+  end)
+
+  -- The division guard is a bare '/' and nothing else: every root-level path
+  -- starts with the same character, and rejecting the whole of '/' made them
+  -- all unreachable until a second directory had been typed in full.
+  it('completes a path at the filesystem root', function()
+    local dir = tree()
+    helpers.buffer({ dir:sub(1, 2) }, dir .. '/main.lua')
+
+    assert.are.equal(0, path.start())
+    assert.is_true(#(path.items() or {}) > 0)
+  end)
+
+  -- vim.fs.dirname() of a url answers with the scheme, and every listing off
+  -- that root is empty. The cwd is the only directory such a buffer has.
+  it('falls back to the cwd in a buffer a plugin backs', function()
+    helpers.buffer({ './lu' }, 'oil://' .. tree())
+
+    assert.are.same({ './lua/' }, labels(path.items()))
   end)
 
   it('lists the buffer directory for a relative token, not the cwd', function()

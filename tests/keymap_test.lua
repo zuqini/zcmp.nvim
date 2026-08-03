@@ -141,6 +141,34 @@ describe('the keymap', function()
     assert.is_true(helpers.notified(notified, 'keymap command'))
   end)
 
+  -- `zcmp.api` exports the predicates alongside the commands, and dispatch
+  -- used to index the whole module: a bound predicate answered "handled" and
+  -- swallowed the key, where a typo at least says so.
+  it('declines a predicate the way it declines a typo', function()
+    local bufnr = helpers.buffer()
+    local ran = false
+    helpers.pum({ selected = 0 })
+    config.setup({
+      keymap = {
+        preset = 'none',
+        ['<C-j>'] = {
+          'is_visible',
+          function()
+            ran = true
+            return true
+          end,
+        },
+      },
+    })
+    keymap.apply(bufnr)
+
+    local notified = helpers.notifications(function()
+      press(bufnr, 'i', '<C-j>')
+    end)
+    assert.is_true(ran)
+    assert.is_true(helpers.notified(notified, 'keymap command'))
+  end)
+
   it('keeps going when a command raises', function()
     local bufnr = helpers.buffer()
     local ran = false

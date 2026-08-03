@@ -112,8 +112,8 @@ Merges {opts} over the defaults, creates |:ZCmp|, and enables the engine.
       fuzzy = { enabled = true },              -- `fuzzy` in 'completeopt'
 
       snippets = {
-        preset = 'default',                    -- vim.snippet
-        expand = function(body) vim.snippet.expand(body) end,
+        preset = 'default',                    -- accepted, never called
+        expand = function(body) vim.snippet.expand(body) end,   -- likewise
         active = function(filter) return vim.snippet.active(filter) end,
         jump = function(direction) vim.snippet.jump(direction) end,
       },
@@ -197,6 +197,16 @@ A provider needs `flags`, `module`, or both.
 understands is a provider: `kspell`, `t` for tags, `k{dict}` for a
 dictionary. See 'complete'.
 
+The built-in `lsp` and `path` providers take `opts` of their own: >lua
+    lsp  = { autotrigger = true, extend_trigger_characters = true },
+    path = { max_items = 250 },
+<
+`extend_trigger_characters` is what widens the server's declared list to
+every letter, and so what makes `autotrigger` fire on a plain keyword at all;
+turn it off for a server that misbehaves under a widened list. `path`'s cap is
+its own rather than `max_items`, because truncating before the items are built
+is less work than 'complete's `^{count}` truncating after.
+
 `enabled` is asked once per resolve; `available` is asked per buffer, after
 it. The built-in `lsp` provider uses `available` to keep the omnifunc out of
 'complete' until a server that answers completion is attached.
@@ -256,7 +266,8 @@ Four presets:
 <
 Each entry is a list of |zcmp-commands|, tried in order until one reports
 that it did something. An entry may also be a function, which is handed the
-API and returns whether it handled the key:
+|zcmp-commands| table -- not the module, so |zcmp.reload()| and the rest of
+|zcmp-api| are not on it -- and returns whether it handled the key:
 
 >lua
     ['<C-l>'] = {
@@ -332,8 +343,15 @@ zcmp.snippet_delete()   Delete the selected placeholder and keep typing in
 zcmp.is_snippet_active({filter})
                         As |vim.snippet.active()|.
 
-All four go through `config.snippets`, so another snippet engine is three
-functions away.
+                                                              *zcmp-snippets*
+All four go through `config.snippets`, so another snippet engine is two
+functions away: `snippets.active` and `snippets.jump`.
+
+`snippets.expand` and `snippets.preset` are blink.cmp's names, accepted so a
+config moves over unedited and never called: whatever put the snippet in the
+buffer expanded it -- zsnip for a snippet source, |vim.lsp.completion| through
+|vim.snippet.expand()| for a server's. Setting either is reported by
+|zcmp.setup()| rather than quietly ignored.
 
 Documentation ~
                                             *zcmp.scroll_documentation_down()*
@@ -379,8 +397,11 @@ zcmp.enable()           Take over completion: write the options, install the
                                                                *zcmp.disable()*
 zcmp.disable()          Hand it back. Mappings are removed and what they
                         displaced is put back, buffers get the 'complete'
-                        and 'autocomplete' they had, and the global options
-                        are restored.
+                        and 'autocomplete' they had, the global options and
+                        the two |hl-PmenuKind| groups are restored, and every
+                        client ZCmp switched |vim.lsp.completion| on for --
+                        and widened the trigger characters of -- is put back
+                        as it was.
 
                                                             *zcmp.is_enabled()*
 zcmp.is_enabled()
@@ -392,12 +413,15 @@ zcmp.reload()           Re-derive 'complete' everywhere, and start any
                                                    *zcmp.add_source_provider()*
 zcmp.add_source_provider({id}, {provider})
                         Register a provider. It serves nothing until a
-                        source list names it. See |zcmp-providers|.
+                        source list names it. See |zcmp-providers|. Order
+                        does not matter: a call before |zcmp.setup()|
+                        survives it, and one after re-derives 'complete' in
+                        every attached buffer.
 
                                                    *zcmp.add_filetype_source()*
 zcmp.add_filetype_source({filetype}, {ids})
                         Add providers to one filetype's list, on top of
-                        `sources.default`.
+                        `sources.default`. Order-free in the same way.
 
                                                   *zcmp.get_lsp_capabilities()*
 zcmp.get_lsp_capabilities({override})

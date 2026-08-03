@@ -77,6 +77,41 @@ describe('global options', function()
   end)
 end)
 
+describe("'autocompletedelay'", function()
+  -- The option raises on a float, and apply_globals() has already taken
+  -- 'autocomplete' off by the time it would: setup() would abandon the editor
+  -- with core's own completion off and ZCmp not attached to anything.
+  it('rounds a value the option would raise on', function()
+    config.setup({ completion = { trigger = { delay_ms = 12.5 } } })
+
+    local notified = helpers.notifications(function()
+      assert.has_no.errors(buffer.apply_globals)
+    end)
+
+    assert.are.equal(12, vim.go.autocompletedelay)
+    assert.is_true(helpers.notified(notified, 'delay_ms is milliseconds as a whole number'))
+  end)
+
+  it('has no negative delay', function()
+    config.setup({ completion = { trigger = { delay_ms = -5 } } })
+
+    helpers.notifications(buffer.apply_globals)
+
+    assert.are.equal(0, vim.go.autocompletedelay)
+  end)
+
+  it('keeps what was there when the value is no kind of number', function()
+    local before = vim.go.autocompletedelay
+
+    helpers.notifications(function()
+      config.setup({ completion = { trigger = { delay_ms = '200' } } })
+      buffer.apply_globals()
+    end)
+
+    assert.are.equal(before, vim.go.autocompletedelay)
+  end)
+end)
+
 describe('attaching', function()
   it('drives an ordinary buffer', function()
     config.setup({ sources = { default = { 'buffer' } } })
@@ -186,5 +221,57 @@ describe('attaching', function()
     vim.wait(100)
 
     assert.is_false(buffer.attached(bufnr))
+  end)
+
+  -- attach() schedules; detach_all() does not. Without a generation to check,
+  -- the pending pass put back everything disable() had just taken.
+  it('drops a pass that was scheduled before everything was detached', function()
+    config.setup({ sources = { default = { 'buffer' } } })
+    local bufnr = helpers.buffer()
+
+    buffer.attach(bufnr)
+    buffer.detach_all()
+    vim.wait(100)
+
+    assert.is_false(buffer.attached(bufnr))
+    assert.are.same({}, keymap.installed(bufnr))
+    assert.is_not_true(vim.bo[bufnr].autocomplete)
+  end)
+
+  -- 'complete' raises rather than ignoring what it does not understand, and
+  -- the value is assembled out of other people's config.
+  it('gives a buffer back rather than leaving it half-wired', function()
+    config.setup({
+      sources = { default = { 'bad' }, providers = { bad = { flags = { 'not a flag' } } } },
+    })
+    local bufnr = helpers.buffer()
+    local before = vim.bo[bufnr].complete
+
+    local notified = helpers.notifications(function()
+      buffer.attach(bufnr)
+      vim.wait(100)
+    end)
+
+    assert.is_false(buffer.attached(bufnr))
+    assert.are.equal(before, vim.bo[bufnr].complete)
+    assert.are.same({}, keymap.installed(bufnr))
+    assert.is_true(helpers.notified(notified, "'complete' would not take"))
+  end)
+
+  it('reports an `enabled` that raises rather than doing so on every BufEnter', function()
+    config.setup({
+      enabled = function()
+        error('no')
+      end,
+    })
+    local bufnr = helpers.buffer()
+
+    local notified = helpers.notifications(function()
+      buffer.attach(bufnr)
+      vim.wait(100)
+    end)
+
+    assert.is_false(buffer.attached(bufnr))
+    assert.is_true(helpers.notified(notified, 'the `enabled` option raised'))
   end)
 end)

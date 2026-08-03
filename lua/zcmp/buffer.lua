@@ -7,12 +7,17 @@
 local api = vim.api
 local config = require('zcmp.config')
 local keymap = require('zcmp.keymap')
+local lsp = require('zcmp.lsp')
 local sources = require('zcmp.sources')
 
 local M = {}
 
 ---@type table<integer, { complete: string, autocomplete: boolean }>
 local attached = {}
+
+---Bumped by every wholesale detach, so that a wire() already sitting in the
+---scheduler does not put back what |zcmp.disable()| has just taken.
+local generation = 0
 
 ---@type table<string, any>?
 local globals = nil
@@ -22,13 +27,15 @@ local understood = nil
 
 ---'completeopt' raises E474 rather than ignoring a value it does not know, and
 ---`preselect` is newer than the 0.12.0 floor. Asked once, by trying each.
+---`menuone` is the base every probe is written against, so it is never a
+---question.
 ---@param flag string
 ---@return boolean
 local function known(flag)
   if not understood then
     understood = {}
     local saved = vim.go.completeopt
-    for _, name in ipairs({ 'menuone', 'fuzzy', 'popup', 'noinsert', 'preselect' }) do
+    for _, name in ipairs({ 'fuzzy', 'popup', 'noinsert', 'preselect' }) do
       understood[name] = pcall(function()
         vim.go.completeopt = 'menuone,' .. name
       end)
@@ -72,6 +79,22 @@ function M.completeopt()
   return table.concat(opts, ',')
 end
 
+---'autocompletedelay' takes a non-negative whole number and raises on a float,
+---which would abandon apply_globals() with 'autocomplete' already off: core's
+---own completion switched off and ZCmp not yet attached to anything.
+---@return integer? ms nil when the value is no kind of number to round
+local function delay()
+  local ms = config.options.completion.trigger.delay_ms
+  local wanted = type(ms) == 'number' and ms > -math.huge and ms < math.huge and math.max(0, math.floor(ms)) or nil
+  if wanted ~= ms then
+    vim.notify_once(
+      ('zcmp: completion.trigger.delay_ms is milliseconds as a whole number, not %s'):format(vim.inspect(ms)),
+      vim.log.levels.WARN
+    )
+  end
+  return wanted
+end
+
 function M.apply_globals()
   globals = globals
     or {
@@ -86,7 +109,7 @@ function M.apply_globals()
   -- Sources only run once the delay elapses, so this also bounds how often a
   -- directory is listed and a server asked. It suppresses nothing while typing
   -- faster than the value.
-  vim.go.autocompletedelay = config.options.completion.trigger.delay_ms
+  vim.go.autocompletedelay = delay() or globals.autocompletedelay
   vim.go.completeopt = M.completeopt()
   -- Autotriggering everywhere would report 'match 1 of 9' on nearly every key.
   vim.opt.shortmess:append('c')
@@ -102,12 +125,39 @@ function M.restore_globals()
   globals = nil
 end
 
+---'complete' raises rather than ignoring a flag it does not understand, and
+---every part of the value can come from somewhere else: a provider's flags,
+---the cap it asks for, a third party's `source()`. A buffer left half-wired --
+---mapped and autocompleting, with the option unwritten -- is worse than one
+---ZCmp never took, and `attached` is set by the time the write runs.
+---@param bufnr integer
+---@return boolean
+local function set_complete(bufnr)
+  local ok, resolved = pcall(sources.resolve, bufnr)
+  if not ok then
+    vim.notify_once(('zcmp: a source failed to resolve: %s'):format(resolved), vim.log.levels.ERROR)
+    return false
+  end
+
+  local written, err = pcall(function()
+    vim.bo[bufnr].complete = resolved
+  end)
+  if not written then
+    vim.notify_once(("zcmp: 'complete' would not take %q: %s"):format(resolved, err), vim.log.levels.ERROR)
+  end
+  return written
+end
+
 ---@param bufnr integer
 local function wire(bufnr)
   if not api.nvim_buf_is_valid(bufnr) then
     return
   end
-  if not config.options.enabled(bufnr) then
+  local ok, enabled = pcall(config.options.enabled, bufnr)
+  if not ok then
+    vim.notify_once(('zcmp: the `enabled` option raised: %s'):format(enabled), vim.log.levels.ERROR)
+  end
+  if not ok or not enabled then
     M.detach(bufnr)
     return
   end
@@ -117,16 +167,26 @@ local function wire(bufnr)
     keymap.apply(bufnr)
   end
   vim.bo[bufnr].autocomplete = config.options.completion.menu.auto_show ~= false
-  vim.bo[bufnr].complete = sources.resolve(bufnr)
+  if not set_complete(bufnr) then
+    M.detach(bufnr)
+    return
+  end
+  -- Same pass, same predicate: |vim.lsp.completion| is one more thing ZCmp
+  -- switches on, so a buffer it does not drive must not get it either.
+  lsp.sync(bufnr, sources.provider(bufnr, 'lsp'))
 end
 
----The one place deciding which buffers this engine owns, reached from BufEnter
----and both LSP hooks. Scheduled because a scratch buffer is still buftype ''
----at BufEnter, and a detaching client is still attached while LspDetach runs.
+---The one place deciding which buffers this engine owns, reached from BufEnter,
+---FileType and both LSP hooks. Scheduled because a scratch buffer is still
+---buftype '' at BufEnter, and a detaching client is still attached while
+---LspDetach runs.
 ---@param bufnr integer
 function M.attach(bufnr)
+  local scheduled = generation
   vim.schedule(function()
-    wire(bufnr)
+    if scheduled == generation then
+      wire(bufnr)
+    end
   end)
 end
 
@@ -144,6 +204,7 @@ function M.detach(bufnr)
   local saved = attached[bufnr]
   attached[bufnr] = nil
   keymap.remove(bufnr)
+  lsp.detach(bufnr)
   if not saved or not api.nvim_buf_is_valid(bufnr) then
     return
   end
@@ -152,9 +213,11 @@ function M.detach(bufnr)
 end
 
 function M.detach_all()
-  for bufnr in pairs(attached) do
+  generation = generation + 1
+  for _, bufnr in ipairs(vim.tbl_keys(attached)) do
     M.detach(bufnr)
   end
+  lsp.detach_all()
 end
 
 ---@param bufnr integer

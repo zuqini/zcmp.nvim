@@ -25,7 +25,6 @@ local DEFAULTS = {
       path = {
         name = 'Path',
         module = 'zcmp.sources.path',
-        opts = { max_items = 250 },
       },
       snippets = {
         name = 'Snippets',
@@ -135,7 +134,34 @@ local function validate(opts, shapes, path)
   end
 end
 
----Deep merge, except that a non-empty list replaces rather than extends: a
+---Options ZCmp accepts so that a blink.cmp config moves over unedited, but
+---cannot act on. Said out loud at setup(): an override that is silently
+---ignored reads exactly like the thing it overrode being broken.
+---@param opts table
+local function report_inert(opts)
+  local snippets = opts.snippets
+  if type(snippets) ~= 'table' then
+    return
+  end
+  if snippets.expand then
+    vim.notify(
+      'zcmp.setup: snippets.expand is never called — whatever inserts the snippet expands it '
+        .. '(zsnip, or vim.lsp.completion through vim.snippet). Substitute an engine through '
+        .. 'snippets.active and snippets.jump.',
+      vim.log.levels.WARN
+    )
+  end
+  if snippets.preset and snippets.preset ~= 'default' then
+    vim.notify(
+      ('zcmp.setup: %q is not a snippets preset; ZCmp has the one. Substitute an engine through '):format(
+        tostring(snippets.preset)
+      ) .. 'snippets.active and snippets.jump.',
+      vim.log.levels.WARN
+    )
+  end
+end
+
+---Deep merge, except that a list replaces rather than extends: a
 ---`sources.default` of two entries means those two, not those two plus the
 ---four that were there.
 ---@param base any
@@ -143,14 +169,19 @@ end
 ---@return any
 local function merge(base, override)
   if type(base) ~= 'table' then
-    return override
+    -- Nothing of ours under this key, so the user's own table is the value.
+    -- Copied, because `options` outlives the table they handed setup() and
+    -- |zcmp.add_filetype_source()| would otherwise edit it in place.
+    return type(override) == 'table' and vim.deepcopy(override) or override
   end
   -- A table-shaped option handed a scalar is a config error, already reported.
   -- Keeping the default is what lets the rest of the config still apply.
   if type(override) ~= 'table' then
     return base
   end
-  if #override > 0 and vim.islist(override) then
+  -- An empty table cannot be told from an empty map by its shape, so the base
+  -- decides: emptying a list is an instruction, `{}` over a map is not.
+  if vim.islist(override) and (next(override) ~= nil or vim.islist(base)) then
     return vim.deepcopy(override)
   end
   local merged = vim.deepcopy(base)
@@ -160,18 +191,74 @@ local function merge(base, override)
   return merged
 end
 
+---Providers and per-filetype entries registered outside setup(). Kept because
+---setup() replaces `options` wholesale: without them the call order would
+---decide whether a registration survived, and a plugin registering one from
+---its own config block runs before the user's setup() as often as after.
+---@type { providers: table<string, zcmp.Provider>, per_filetype: table<string, zcmp.SourceList> }
+local additions = { providers = {}, per_filetype = {} }
+
+---@param per_filetype table<string, zcmp.SourceList>
+---@param filetype string
+---@param ids string[]
+local function add_ids(per_filetype, filetype, ids)
+  local list = per_filetype[filetype]
+  if not list then
+    list = { inherit_defaults = true }
+    per_filetype[filetype] = list
+  end
+  for _, id in ipairs(ids) do
+    if not vim.tbl_contains(list, id) then
+      list[#list + 1] = id
+    end
+  end
+end
+
+---@param sources zcmp.ResolvedSources
+local function apply_additions(sources)
+  for id, provider in pairs(additions.providers) do
+    sources.providers[id] = provider
+  end
+  for filetype, ids in pairs(additions.per_filetype) do
+    add_ids(sources.per_filetype, filetype, ids)
+  end
+end
+
 ---Replaces `options` rather than editing it in place, so a reader can tell a
----late setup() by identity alone.
+---late setup() by identity alone. Registrations made before it ran go
+---underneath, so that an explicit `opts` still wins.
 ---@param opts? zcmp.Config
 function M.setup(opts)
   if opts then
     validate(opts, SHAPES, '')
+    report_inert(opts)
   end
-  M.options = merge(DEFAULTS, opts or {})
+  local base = vim.deepcopy(DEFAULTS)
+  apply_additions(base.sources)
+  M.options = merge(base, opts or {})
 end
 
----Restore the defaults. Used by tests.
+---Register a provider, whether or not setup() has run yet.
+---@param id string
+---@param provider zcmp.Provider
+function M.add_provider(id, provider)
+  additions.providers[id] = provider
+  M.options.sources.providers[id] = provider
+end
+
+---Add providers to one filetype's list, whether or not setup() has run yet.
+---@param filetype string
+---@param ids string|string[]
+function M.add_filetype_source(filetype, ids)
+  ---@type string[]
+  local adding = type(ids) == 'table' and ids or { ids }
+  add_ids(additions.per_filetype, filetype, adding)
+  add_ids(M.options.sources.per_filetype, filetype, adding)
+end
+
+---Restore the defaults, registrations included. Used by tests.
 function M.reset()
+  additions = { providers = {}, per_filetype = {} }
   M.options = vim.deepcopy(DEFAULTS)
 end
 

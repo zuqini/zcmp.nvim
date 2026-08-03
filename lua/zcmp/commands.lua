@@ -22,7 +22,11 @@ function M.status(bufnr)
   }
 
   for _, source in ipairs(require('zcmp.sources').list(bufnr)) do
-    local detail = source.problem or table.concat(source.entries, ',')
+    local entries = table.concat(source.entries, ',')
+    -- A provider can serve its flags and still have a problem worth naming --
+    -- a module of its own that is not installed.
+    local detail = source.problem and (entries ~= '' and source.problem .. ' — ' .. entries or source.problem)
+      or entries
     lines[#lines + 1] = ('  %-10s %s %s'):format(source.id, source.active and '✓' or '✗', detail)
   end
 
@@ -57,6 +61,8 @@ local ACTIONS = {
   end,
 }
 
+---Take the command back out. |zcmp.disable()| deliberately leaves it, since
+---`:ZCmp enable` is how you come back; used by tests.
 function M.remove()
   pcall(vim.api.nvim_del_user_command, 'ZCmp')
 end

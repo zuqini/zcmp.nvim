@@ -91,7 +91,12 @@ local function check_sources(bufnr)
 
   for _, source in ipairs(resolved) do
     local name = source.provider.name or source.id
-    if source.active then
+    -- A provider declaring both `flags` and a `module` serves the flags even
+    -- when the module is missing. Reporting that as a plain tick hides the one
+    -- thing checkhealth is here to find.
+    if source.active and source.problem then
+      vim.health.warn(('%s: %s — serving %s'):format(name, source.problem, table.concat(source.entries, ',')))
+    elseif source.active then
       vim.health.ok(('%s: %s'):format(name, table.concat(source.entries, ',')))
     elseif source.problem == 'unavailable in this buffer' then
       vim.health.info(('%s: nothing to serve in this buffer'):format(name))

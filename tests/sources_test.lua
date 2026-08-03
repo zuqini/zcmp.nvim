@@ -184,12 +184,107 @@ describe('source resolution', function()
     assert.are.equal('.^100,w^100,b^100', sources.resolve(bufnr))
   end)
 
-  it('knows whether a buffer wants a provider at all, availability aside', function()
+  it('hands back the provider a buffer names, availability aside', function()
     local bufnr = helpers.buffer()
     config.setup({ sources = { default = { 'lsp', 'buffer' } } })
 
-    assert.is_true(sources.wants(bufnr, 'lsp'))
-    assert.is_false(sources.wants(bufnr, 'path'))
-    assert.is_false(sources.wants(bufnr, 'nope'))
+    assert.are.equal('LSP', (sources.provider(bufnr, 'lsp') or {}).name)
+    assert.is_nil(sources.provider(bufnr, 'path'))
+    assert.is_nil(sources.provider(bufnr, 'nope'))
+  end)
+
+  -- `:ZCmp status` and `:checkhealth zcmp` both reach list(). A diagnostic
+  -- that configures the plugin it is diagnosing is the worst kind to read.
+  it('starts a provider module on the way to writing the option, not to report', function()
+    local bufnr = helpers.buffer()
+    local started = 0
+    register('fake_source', {
+      source = function()
+        return 'Ffake'
+      end,
+      enable = function()
+        started = started + 1
+      end,
+    })
+    config.setup({ sources = { default = { 'fake' }, providers = { fake = { module = 'fake_source' } } } })
+
+    sources.list(bufnr)
+    assert.are.equal(0, started)
+
+    sources.resolve(bufnr)
+    sources.resolve(bufnr)
+    assert.are.equal(1, started)
+  end)
+
+  it('reports a module whose enable() raises, and does not retry it', function()
+    local bufnr = helpers.buffer()
+    local tries = 0
+    register('fake_source', {
+      source = function()
+        return 'Ffake'
+      end,
+      enable = function()
+        tries = tries + 1
+        error('no')
+      end,
+    })
+    config.setup({ sources = { default = { 'fake' }, providers = { fake = { module = 'fake_source' } } } })
+
+    assert.are.equal('', sources.resolve(bufnr))
+    assert.are.equal('', sources.resolve(bufnr))
+    assert.are.equal(1, tries)
+    assert.is_true(resolved(bufnr, 'fake').problem:find('failed to start', 1, true) ~= nil)
+  end)
+
+  -- Anything a provider declares can be somebody else's function, and the list
+  -- is what `:checkhealth` reads: one of them raising is that provider's
+  -- problem, not the list's.
+  it('reports a provider whose available() raises', function()
+    local bufnr = helpers.buffer()
+    config.setup({
+      sources = {
+        default = { 'bad', 'buffer' },
+        providers = {
+          bad = {
+            flags = { '.' },
+            available = function()
+              error('no')
+            end,
+          },
+        },
+      },
+    })
+
+    assert.are.equal('.^100,w^100,b^100', sources.resolve(bufnr))
+    assert.is_false(resolved(bufnr, 'bad').active)
+    assert.is_not_nil(resolved(bufnr, 'bad').problem)
+  end)
+
+  -- A provider may declare both; the flags still serve when the module does
+  -- not, and hiding that behind a tick is what checkhealth exists to prevent.
+  it('keeps the problem of a provider that serves its flags anyway', function()
+    local bufnr = helpers.buffer()
+    config.setup({
+      sources = {
+        default = { 'half' },
+        providers = { half = { flags = { '.' }, module = 'no_such_module' } },
+      },
+    })
+
+    local source = resolved(bufnr, 'half')
+    assert.is_true(source.active)
+    assert.is_true(source.problem:find('not on the runtimepath', 1, true) ~= nil)
+  end)
+
+  it('hands back nothing for a provider the buffer has switched off', function()
+    local bufnr = helpers.buffer()
+    config.setup({
+      sources = {
+        default = { 'lsp' },
+        providers = { lsp = { enabled = false } },
+      },
+    })
+
+    assert.is_nil(sources.provider(bufnr, 'lsp'))
   end)
 end)
