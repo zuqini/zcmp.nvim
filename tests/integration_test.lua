@@ -335,7 +335,6 @@ describe('with a language server attached', function()
           default = { 'lsp', 'path', 'snip' },
           providers = { snip = { module = 'zcmp_fake_snippets' } },
         },
-        completion = { menu = { auto_show_delay_ms = 50 } },
       })
       vim.cmd('edit %s/main.txt')
       vim.lsp.start({ name = 'fake', cmd = server, root_dir = %q }, { bufnr = 0 })
@@ -399,7 +398,6 @@ describe('with a language server attached', function()
         .. ([[
       require('zcmp').setup({
         sources = { default = { 'lsp' } },
-        completion = { menu = { auto_show_delay_ms = 50 } },
       })
       vim.cmd('edit %s/main.lua')
       vim.lsp.start({ name = 'fake', cmd = server, root_dir = %q }, { bufnr = 0 })
@@ -441,7 +439,6 @@ describe('with a language server attached', function()
           default = { 'lsp', 'snip' },
           providers = { snip = { module = 'zcmp_fake_keyless' } },
         },
-        completion = { menu = { auto_show_delay_ms = 50 } },
       })
       vim.cmd('edit %s/main.txt')
       vim.lsp.start({ name = 'fake', cmd = server, root_dir = %q }, { bufnr = 0 })
@@ -513,8 +510,7 @@ describe('with a language server attached', function()
         require('zcmp').setup({
           keymap = %s,
           sources = { default = { 'lsp', 'buffer' } },
-          completion = { menu = { auto_show_delay_ms = 50 } },
-        })
+          })
         vim.cmd('edit %s/main.txt')
         vim.lsp.start({ name = 'fake', cmd = server, root_dir = %q }, { bufnr = 0 })
         scenario({

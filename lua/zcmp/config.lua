@@ -52,7 +52,7 @@ local DEFAULTS = {
     },
   },
   completion = {
-    menu = { auto_show = true, auto_show_delay_ms = 200 },
+    menu = { auto_show = true },
     documentation = { auto_show = true },
     list = { selection = { preselect = true, auto_insert = false } },
   },
@@ -156,7 +156,7 @@ local SHAPES = {
     providers = { __any = PROVIDER_SHAPE },
   },
   completion = {
-    menu = { auto_show = 'boolean', auto_show_delay_ms = 'number' },
+    menu = { auto_show = 'boolean' },
     documentation = { auto_show = 'boolean' },
     list = {
       max_items = 'number',
@@ -248,6 +248,18 @@ local function compact(list)
   return out
 end
 
+---Options ZCmp used to take, keyed by the dotted path `prune()` builds, and
+---what to say instead of `unknown option` -- which reads as a typo, the one
+---thing a key that was documented and copied out of the README is not.
+---@type table<string, string>
+local REMOVED = {
+  ['completion.menu.auto_show_delay_ms'] = "ZCmp now holds 'autocompletedelay' at 0. A non-zero delay let "
+    .. 'vim.lsp.completion open the menu through vim.fn.complete() first, and a menu opened that way never '
+    .. "asks a 'complete' source again for the rest of the completion cycle -- so every non-LSP source was "
+    .. 'silently missing from it. Use `completion.menu.auto_show = false` to stop the menu opening as you '
+    .. "type; core's own 'autocompletetimeout' is what bounds a slow source.",
+}
+
 ---An unknown key is almost always a typo for a known one, and a merged-in
 ---`max_item` or `documention` is a silent no-op that reads exactly like the
 ---option not working. Reported rather than raised: a config that is wrong in
@@ -288,7 +300,12 @@ local function prune(opts, shapes, path, where)
       local shape = type(key) == 'number' and shapes.__list or shapes[key] or shapes.__any
       local nested = nested_shape(shape)
       if not shape then
-        vim.notify(('%s: unknown option %q'):format(where, name), vim.log.levels.WARN)
+        local removed = REMOVED[name]
+        vim.notify(
+          removed and ('%s: %s has been removed. %s'):format(where, name, removed)
+            or ('%s: unknown option %q'):format(where, name),
+          vim.log.levels.WARN
+        )
       elseif nested then
         if value == false and nested.__false then
           -- `false` beside the table this shape describes: blink's "same as

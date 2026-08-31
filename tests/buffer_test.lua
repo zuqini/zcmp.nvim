@@ -61,95 +61,57 @@ describe('global options', function()
     buffer.apply_globals()
 
     assert.is_false(vim.go.autocomplete)
-    assert.are.equal(200, vim.go.autocompletedelay)
+    assert.are.equal(0, vim.go.autocompletedelay)
     assert.are.equal(buffer.completeopt(), vim.go.completeopt)
     assert.is_not_nil(vim.go.shortmess:find('c', 1, true))
   end)
 
   it('puts back what it found', function()
-    local before = { completeopt = vim.go.completeopt, delay = vim.go.autocompletedelay }
-    config.setup({ completion = { menu = { auto_show_delay_ms = 50 } } })
+    local outer = vim.go.autocompletedelay
+    local before = { completeopt = vim.go.completeopt, delay = 200 }
+    vim.go.autocompletedelay = before.delay
+    config.setup({})
 
     buffer.apply_globals()
-    assert.are.equal(50, vim.go.autocompletedelay)
+    assert.are.equal(0, vim.go.autocompletedelay)
 
     buffer.restore_globals()
     assert.are.equal(before.completeopt, vim.go.completeopt)
     assert.are.equal(before.delay, vim.go.autocompletedelay)
+    vim.go.autocompletedelay = outer
   end)
 end)
 
 describe("'autocompletedelay'", function()
-  -- The option raises on a float, and apply_globals() has already taken
-  -- 'autocomplete' off by the time it would: setup() would abandon the editor
-  -- with core's own completion off and ZCmp not attached to anything.
-  it('rounds a value the option would raise on', function()
-    config.setup({ completion = { menu = { auto_show_delay_ms = 12.5 } } })
+  -- Held at 0 whatever it was, and with no option to raise it: any non-zero
+  -- value lets vim.lsp.completion open the menu through vim.fn.complete()
+  -- before core has scanned 'complete', and core never scans it again for the
+  -- rest of that cycle. See buffer.apply_globals().
+  it('overrides a non-zero value the user set themselves', function()
+    vim.go.autocompletedelay = 500
+    config.setup({})
 
+    buffer.apply_globals()
+
+    assert.are.equal(0, vim.go.autocompletedelay)
+  end)
+
+  it('reports the removed option rather than calling it unknown', function()
     local notified = helpers.notifications(function()
-      assert.has_no.errors(buffer.apply_globals)
+      config.setup({ completion = { menu = { auto_show_delay_ms = 200 } } })
     end)
 
-    assert.are.equal(12, vim.go.autocompletedelay)
-    assert.is_true(helpers.notified(notified, 'delay_ms is milliseconds as a whole number'))
+    assert.is_true(helpers.notified(notified, 'auto_show_delay_ms has been removed'))
+    assert.is_false(helpers.notified(notified, 'unknown option'))
   end)
 
-  it('clamps a delay the option would refuse', function()
-    config.setup({ completion = { menu = { auto_show_delay_ms = 1e10 } } })
-
-    local notified = helpers.notifications(buffer.apply_globals)
-
-    assert.are.equal(2147483647, vim.go.autocompletedelay)
-    assert.is_true(helpers.notified(notified, 'delay_ms'))
-  end)
-
-  -- math.huge is a number `ms < math.huge` rejects outright, which used to
-  -- fall through to nil and silently keep whatever 'autocompletedelay' had
-  -- before -- rather than clamping like every other out-of-range value does.
-  it('clamps positive infinity the same way', function()
-    config.setup({ completion = { menu = { auto_show_delay_ms = math.huge } } })
-
-    local notified = helpers.notifications(buffer.apply_globals)
-
-    assert.are.equal(2147483647, vim.go.autocompletedelay)
-    assert.is_true(helpers.notified(notified, 'delay_ms'))
-  end)
-
-  it('clamps negative infinity to zero', function()
-    config.setup({ completion = { menu = { auto_show_delay_ms = -math.huge } } })
-
-    local notified = helpers.notifications(buffer.apply_globals)
-
-    assert.are.equal(0, vim.go.autocompletedelay)
-    assert.is_true(helpers.notified(notified, 'delay_ms'))
-  end)
-
-  it('has no negative delay', function()
-    config.setup({ completion = { menu = { auto_show_delay_ms = -5 } } })
-
-    helpers.notifications(buffer.apply_globals)
-
-    assert.are.equal(0, vim.go.autocompletedelay)
-  end)
-
-  it('keeps what was there when the value is no kind of number to round', function()
-    local before = vim.go.autocompletedelay
-
+  it('keeps 0 even when the removed option asked for a delay', function()
     helpers.notifications(function()
-      config.setup({ completion = { menu = { auto_show_delay_ms = 0 / 0 } } })
+      config.setup({ completion = { menu = { auto_show_delay_ms = 200 } } })
       buffer.apply_globals()
     end)
 
-    assert.are.equal(before, vim.go.autocompletedelay)
-  end)
-
-  it('applies the default when config has thrown a wrong-typed value out', function()
-    helpers.notifications(function()
-      config.setup({ completion = { menu = { auto_show_delay_ms = '200' } } })
-      buffer.apply_globals()
-    end)
-
-    assert.are.equal(200, vim.go.autocompletedelay)
+    assert.are.equal(0, vim.go.autocompletedelay)
   end)
 end)
 

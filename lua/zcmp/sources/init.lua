@@ -109,11 +109,10 @@ local function enabled(provider, bufnr)
 end
 
 ---Config checks a cap's type; its range -- a whole number `>= 1`, so not a
----float, zero, negative or infinite -- is the consumer's to check, the same
----split buffer.lua's `delay()` makes for 'autocompletedelay'. A fraction
----rounds down with a warning; anything else warns and answers nil. `subject`
----names the offender in the report: `provider "buffer" max_items`,
----`path opts.limit`.
+---float, zero, negative or infinite -- is the consumer's to check, because no
+---shape table can say a range. A fraction rounds down with a warning;
+---anything else warns and answers nil. `subject` names the offender in the
+---report: `provider "buffer" max_items`, `path opts.limit`.
 ---@param value unknown
 ---@param subject string
 ---@return integer?

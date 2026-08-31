@@ -86,27 +86,6 @@ function M.completeopt()
   return table.concat(opts, ',')
 end
 
----'autocompletedelay' takes a non-negative whole number and raises on a float,
----which would abandon apply_globals() with 'autocomplete' already off: core's
----own completion switched off and ZCmp not yet attached to anything. The
----type is config's to check; what is left here is the range, which no shape
----can say.
----@return integer? ms nil when the value is no kind of number to round
-local function delay()
-  local ms = config.options.completion.menu.auto_show_delay_ms
-  -- Clamped at what the option takes: above 2^31 it raises the same E474 a
-  -- float does, and math.floor of a large float is still a float. ms == ms
-  -- excludes NaN, the one value with nothing to round.
-  local wanted = ms == ms and math.min(math.max(0, math.floor(ms)), 2147483647) or nil
-  if wanted ~= ms then
-    vim.notify_once(
-      ('zcmp: completion.menu.auto_show_delay_ms is milliseconds as a whole number, not %s'):format(vim.inspect(ms)),
-      vim.log.levels.WARN
-    )
-  end
-  return wanted
-end
-
 function M.apply_globals()
   globals = globals
     or {
@@ -118,13 +97,23 @@ function M.apply_globals()
 
   -- Buffer-local opt-in, so a prompt or terminal buffer keeps core's own menu.
   vim.go.autocomplete = false
-  -- The 'complete' sources only run once the delay elapses, so this also
-  -- bounds how often a directory is listed. It does not reach
-  -- vim.lsp.completion's autotrigger, which is not a 'complete' source: that
-  -- asks the server on every trigger character, undelayed, and is switched
-  -- off with `auto_show` (see lsp.attach). It suppresses nothing while typing
-  -- faster than the value.
-  vim.go.autocompletedelay = delay() or globals.autocompletedelay
+  -- Held at 0, and not configurable: a delay here is a race ZCmp loses.
+  -- vim.lsp.completion's autotrigger is not a 'complete' source and does not
+  -- wait for this -- it asks the server 25ms after a trigger character, and
+  -- ZCmp widens that list to every letter (see lsp.trigger_characters) -- so
+  -- any non-zero value hands the server the first keystroke of every word.
+  -- The menu it opens comes from vim.fn.complete(), and core never scans
+  -- 'complete' again for the rest of that cycle: `complete_info().mode` is
+  -- 'eval' rather than 'keyword', which is the mode 'autocomplete' and
+  -- `refresh = 'always'` both belong to. Every non-LSP source is then absent
+  -- from the menu until a deletion ends the cycle. At 0 the scan is
+  -- synchronous on the keystroke, ahead of that 25ms floor, so the sources
+  -- are in the menu before the server's answer merges into it.
+  -- What is given up is the debounce, in the buffers that have no client to
+  -- lose the race to; 'autocompletetimeout' is core's own bound on a slow
+  -- source, and `completion.menu.auto_show = false` still turns the whole
+  -- thing off.
+  vim.go.autocompletedelay = 0
   vim.go.completeopt = M.completeopt()
   -- Autotriggering everywhere would report 'match 1 of 9' on nearly every key.
   vim.opt.shortmess:append('c')

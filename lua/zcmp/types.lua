@@ -54,7 +54,7 @@
 ---@field available? fun(bufnr: integer): boolean Checked per buffer, once `enabled` has answered true. zcmp's own; blink.cmp's `enabled` takes the same shape, but it has nothing named `available`. Read as a boolean the same way: nil is false
 
 ---@class zcmp.CompletionConfig
----@field menu? { auto_show?: boolean, auto_show_delay_ms?: integer } `auto_show` opens the menu as you type, i.e. 'autocomplete' and the `lsp` provider's autotrigger (default true); `auto_show_delay_ms` is 'autocompletedelay' (default 200), which the autotrigger does not wait for
+---@field menu? { auto_show?: boolean } `auto_show` opens the menu as you type, i.e. 'autocomplete' and the `lsp` provider's autotrigger (default true). There is no delay knob: ZCmp holds 'autocompletedelay' at 0, because a delay hands the first keystroke of every word to the autotrigger, which does not wait for it
 ---@field documentation? { auto_show?: boolean } Documentation popup, i.e. `popup` in 'completeopt' (default true)
 ---@field list? zcmp.ListConfig
 
@@ -92,7 +92,7 @@
 ---@field providers table<string, zcmp.Provider>
 
 ---@class zcmp.ResolvedCompletion
----@field menu { auto_show: boolean, auto_show_delay_ms: integer }
+---@field menu { auto_show: boolean }
 ---@field documentation { auto_show: boolean }
 ---@field list { max_items?: integer, selection: { preselect: boolean, auto_insert: boolean } }
 

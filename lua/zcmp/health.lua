@@ -103,7 +103,23 @@ local function check_setup()
     end
   end
 
-  vim.health.info(("'autocompletedelay' = %d"):format(vim.o.autocompletedelay))
+  -- Checked rather than reported, and only while enabled -- for the same
+  -- reason 'completeopt' is. A non-zero value is the one that hides every
+  -- non-LSP source behind vim.lsp.completion's autotrigger; see
+  -- buffer.apply_globals().
+  if enabled then
+    if vim.go.autocompletedelay == 0 then
+      vim.health.ok("'autocompletedelay' = 0")
+    else
+      vim.health.warn(("'autocompletedelay' is %d, not the 0 zcmp sets"):format(vim.go.autocompletedelay), {
+        'Something set it after zcmp did. While it is non-zero, the LSP',
+        "autotrigger opens the menu before any 'complete' source is scanned,",
+        'and no source but the server reaches that menu until you delete a',
+        'character. Set `completion.menu.auto_show = false` to stop the menu',
+        'opening as you type instead.',
+      })
+    end
+  end
 
   -- The flag is newer than the 0.12.0 floor, and without it nothing is ever
   -- selected while the menu opens by itself.

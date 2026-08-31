@@ -187,12 +187,39 @@ misses:
 - **`vim.lsp.completion`'s autotrigger**, which re-asks per trigger character
   but answers nothing for a plain keyword. It opens the menu on its own,
   undelayed: `completion.menu.auto_show = false` switches it off along with
-  `'autocomplete'` (the menu then opens on `<C-space>` only), and
-  `auto_show_delay_ms` does not apply to it.
+  `'autocomplete'` (the menu then opens on `<C-space>` only).
 
 ZCmp widens the server's declared `triggerCharacters` to every letter, which
 is what makes the second one fire at all, and puts the declared list back when
 the last buffer using that client lets go of it.
+
+### `'autocompletedelay'` is held at 0, and there is no option to change it
+
+`'autocompletedelay'` delays core's scan of `'complete'`. It does not delay
+the autotrigger, which is not a `'complete'` source: that asks the server
+25 ms after a trigger character, and the trigger list has just been widened to
+every letter. With any non-zero delay the server therefore answers first, on
+the opening keystroke of every word.
+
+The menu it answers into is `complete()`'s, and that is a different kind of
+completion session — `complete_info().mode` reads `eval` rather than
+`keyword`. Core re-scans `'complete'` only in a `keyword` session, so once the
+LSP owns the menu, no `'complete'` source is asked again for the rest of the
+cycle: `refresh = 'always'` has no loop left to be called from, and
+`'autocomplete'` and `'autocompletetimeout'` stop applying too. Every non-LSP
+source — path, snippets, the buffer scanners — is then missing from the menu
+until a deletion ends the cycle.
+
+At 0 the scan is synchronous on the keystroke, ahead of that 25 ms floor, so
+the sources are in the menu before the server's answer merges into it. What it
+costs is the debounce, in buffers with no client to lose the race to;
+`'autocompletetimeout'` is core's own bound on a slow source there, and
+`completion.menu.auto_show = false` still stops the menu opening as you type.
+
+One limit is core's and remains: a source is asked once per cycle, at the
+keystroke that opens it. A source with nothing to offer for the first
+character that would have matched by the third never appears, because by then
+the session is `eval`. Deleting a character is the only thing that re-asks.
 
 Switching `vim.lsp.completion` on is also what buys the parts of LSP
 completion that are not a list of words. On accept, core expands a snippet
@@ -480,8 +507,6 @@ require('zcmp').setup({
     menu = {
       auto_show = true,                   -- 'autocomplete', and the lsp provider's
                                           -- autotrigger: open as you type
-      auto_show_delay_ms = 200,           -- 'autocompletedelay'; the autotrigger
-                                          -- does not wait for it
     },
     documentation = { auto_show = true }, -- `popup` in 'completeopt'
     list = {

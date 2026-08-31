@@ -202,8 +202,8 @@ lsp = {
   -- Ask the server again on every trigger character, through
   -- vim.lsp.completion. Both delivery paths are on by default because each
   -- covers what the other misses. `completion.menu.auto_show = false` turns
-  -- this off too -- the menu then opens on <C-space> only -- and
-  -- `auto_show_delay_ms` does not delay it.
+  -- this off too -- the menu then opens on <C-space> only. Nothing delays
+  -- it, which is why ZCmp holds 'autocompletedelay' at 0.
   autotrigger = true,
   -- Widen the server's declared triggerCharacters to every letter, which is
   -- what makes autotrigger fire on a plain keyword at all. Turn it off for a

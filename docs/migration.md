@@ -24,7 +24,6 @@ require('zcmp').setup(opts)
 | `sources.per_filetype`, including `inherit_defaults` | same |
 | `sources.providers.<id>.name` / `.module` / `.opts` / `.enabled` / `.max_items` | same keys, different module contract — see [sources.md](sources.md); `.flags` and `.available` are ZCmp's own — literal 'complete' flags for a source core already implements, and a per-buffer check with no equivalent in blink's `enabled` |
 | `completion.menu.auto_show` | same (becomes `'autocomplete'`) |
-| `completion.menu.auto_show_delay_ms` | same (becomes `'autocompletedelay'`) |
 | `completion.documentation.auto_show` | same (becomes `popup` in `'completeopt'`) |
 | `completion.list.max_items` | same (becomes each source's `^{count}`) |
 | `completion.list.selection.preselect` / `.auto_insert` | same (become `preselect` / `noinsert`) |
@@ -68,7 +67,8 @@ that ZCmp does not:
 | `completion.menu.draw.*` (columns, treesitter highlighting, components) | Core draws the menu. `'completeitemalign'` orders the three columns it has; `appearance.kind_hl` (ZCmp's own) colours the kind one. |
 | `completion.accept.auto_brackets` | Not ZCmp's job. An autopair plugin's `<CR>` still runs through `'fallback'`. |
 | `completion.documentation.auto_show_delay_ms`, `window.*` | The popup is core's, and appears with the menu. |
-| `completion.trigger.show_on_trigger_character` and friends | Core decides when to open, from `'autocomplete'` and `'autocompletedelay'`. `completion.menu.auto_show_delay_ms` is the one knob. |
+| `completion.trigger.show_on_trigger_character` and friends | Core decides when to open, from `'autocomplete'`. `completion.menu.auto_show` is the one switch. |
+| `completion.menu.auto_show_delay_ms` | Removed in ZCmp, and there is no core option left to point at: `'autocompletedelay'` is held at 0. A delay hands the first keystroke of every word to `vim.lsp.completion`'s autotrigger, and the menu it opens never asks a `'complete'` source again. See [`'autocompletedelay'` is held at 0](../README.md#autocompletedelay-is-held-at-0-and-there-is-no-option-to-change-it). |
 | `sources.providers.<id>.score_offset`, `.fallbacks`, `.transform_items`, `.should_show_items`, `.min_keyword_length` | Ranking happens inside core, across all sources at once, and there is no hook in it. `max_items` and `available` are what is left. |
 | `fuzzy.implementation`, `.sorts`, `.prebuilt_binaries` | There is no matcher here to configure or download; `fuzzy.enabled` — ZCmp's own, blink has no such switch — toggles core's. |
 | `appearance.kind_icons`, `.nerd_font_variant` | Core draws the kind column from what a source put in `kind`. |
@@ -138,14 +138,14 @@ otherwise end completion without a newline. That is why every preset but
 `none` maps `<CR>` to `fallback`; under `none`, that Vim rule applies as
 written until you add `['<CR>'] = { 'fallback' }`.
 
-**The menu waits.** `completion.menu.auto_show_delay_ms` (200 by default) is
-`'autocompletedelay'`: the `'complete'` sources do not run until typing pauses
-for that long, which is also what bounds how often a directory is listed. The
-`lsp` provider's autotrigger is not one of them — it asks the server on every
-keystroke, undelayed, and `completion.menu.auto_show = false` is what switches
-it off. blink's menu appears immediately and filters asynchronously. Set the
-delay to 0 for blink's cadence, at the cost of running every source on every
-keystroke.
+**The menu does not wait.** ZCmp holds `'autocompletedelay'` at 0 and offers
+no knob for it, which is blink's cadence anyway — the menu appears as you
+type. `completion.menu.auto_show = false` is the one switch, and it turns off
+both `'autocomplete'` and the autotrigger. Why the knob is gone rather than
+merely defaulted to 0 is in the README, under
+[`'autocompletedelay'` is held at 0](../README.md#autocompletedelay-is-held-at-0-and-there-is-no-option-to-change-it):
+short version, a delay lets the LSP open the menu first, and a menu opened
+that way never asks a `'complete'` source again.
 
 ## Keeping both installed
 

@@ -13,7 +13,7 @@ describe('config', function()
     config.setup({ keymap = { preset = 'enter' } })
 
     assert.are.equal('enter', config.options.keymap.preset)
-    assert.are.equal(200, config.options.completion.menu.auto_show_delay_ms)
+    assert.is_true(config.options.completion.menu.auto_show)
     assert.is_true(config.options.completion.list.selection.preselect)
   end)
 
@@ -61,20 +61,20 @@ describe('config', function()
 
   it('reports a known option of the wrong type', function()
     local notified = helpers.notifications(function()
-      config.setup({ completion = { menu = { auto_show_delay_ms = '200' } } })
+      config.setup({ completion = { menu = { auto_show = 'yes' } } })
     end)
 
-    assert.is_true(helpers.notified(notified, 'completion.menu.auto_show_delay_ms should be number'))
+    assert.is_true(helpers.notified(notified, 'completion.menu.auto_show should be boolean'))
   end)
 
   -- A wrong-typed leaf must default exactly as a wrong-typed table does,
   -- rather than land in ResolvedConfig as though it had passed the check.
   it('defaults a scalar leaf of the wrong type instead of keeping it', function()
     helpers.notifications(function()
-      config.setup({ completion = { menu = { auto_show_delay_ms = '200' } } })
+      config.setup({ completion = { menu = { auto_show = 'yes' } } })
     end)
 
-    assert.are.equal(200, config.options.completion.menu.auto_show_delay_ms)
+    assert.is_true(config.options.completion.menu.auto_show)
   end)
 
   -- `kind_hl` accepts a string or the literal `false` -- a value of neither
@@ -109,7 +109,7 @@ describe('config', function()
 
   it('still applies a valid sibling in the same table as a wrong-typed leaf', function()
     helpers.notifications(function()
-      config.setup({ completion = { menu = { auto_show_delay_ms = '200' } }, keymap = { preset = 'enter' } })
+      config.setup({ completion = { menu = { auto_show = 'yes' } }, keymap = { preset = 'enter' } })
     end)
 
     assert.are.equal('enter', config.options.keymap.preset)
