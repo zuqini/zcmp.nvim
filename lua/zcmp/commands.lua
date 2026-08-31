@@ -1,8 +1,14 @@
 ---The `:ZCmp` user command. Created by |zcmp.setup()|.
 
-local M = {}
+-- init.lua requires this module only from inside setup(), never at the top
+-- level, so requiring 'zcmp' here forces no cycle -- and neither do these:
+-- buffer.lua, keymap.lua and sources/init.lua never require commands.lua.
+local zcmp = require('zcmp')
+local buffer = require('zcmp.buffer')
+local keymap = require('zcmp.keymap')
+local sources = require('zcmp.sources')
 
-local SUBCOMMANDS = { 'status', 'enable', 'disable', 'reload' }
+local M = {}
 
 ---What is actually serving this buffer, which is the question a menu that came
 ---back empty raises: the source is either not in the list, not available here,
@@ -10,10 +16,6 @@ local SUBCOMMANDS = { 'status', 'enable', 'disable', 'reload' }
 ---@param bufnr integer
 ---@return string[]
 function M.status(bufnr)
-  local zcmp = require('zcmp')
-  local buffer = require('zcmp.buffer')
-  local keymap = require('zcmp.keymap')
-
   local lines = {
     ('ZCmp.nvim %s — %s'):format(zcmp.version, zcmp.is_enabled() and 'enabled' or 'disabled'),
     ('buffer %d — %s'):format(bufnr, buffer.attached(bufnr) and 'attached' or 'not attached'),
@@ -21,7 +23,7 @@ function M.status(bufnr)
     'sources',
   }
 
-  for _, source in ipairs(require('zcmp.sources').list(bufnr)) do
+  for _, source in ipairs(sources.list(bufnr)) do
     local entries = table.concat(source.entries, ',')
     -- A provider can serve its flags and still have a problem worth naming --
     -- a module of its own that is not installed.
@@ -35,11 +37,22 @@ function M.status(bufnr)
     keys[#keys + 1] = ('%s:%s'):format(key.mode, key.lhs)
   end
 
+  -- Both 'autocomplete' and 'completeopt' are global-local: `vim.bo[bufnr]`
+  -- reads the local slot alone, which is nil/empty in any buffer that has
+  -- never set it locally -- every buffer zcmp does not drive, and every one
+  -- after `:ZCmp disable`. `nvim_buf_call` reads the value 'set' would
+  -- report for `bufnr`: local if set, global otherwise. Only its first return
+  -- value survives on the 0.12.0 floor (nightly keeps every one, neovim#39801),
+  -- so both options are read through one table rather than two return values.
+  local go = vim.api.nvim_buf_call(bufnr, function()
+    return { autocomplete = vim.o.autocomplete, completeopt = vim.o.completeopt }
+  end)
+
   vim.list_extend(lines, {
     '',
     ("'complete'   %s"):format(vim.bo[bufnr].complete),
-    ("'completeopt' %s"):format(vim.o.completeopt),
-    ("'autocomplete' %s"):format(vim.bo[bufnr].autocomplete),
+    ("'completeopt' %s"):format(go.completeopt),
+    ("'autocomplete' %s"):format(go.autocomplete),
     '',
     'keys  ' .. (#keys > 0 and table.concat(keys, ' ') or '(none)'),
   })
@@ -51,15 +64,18 @@ local ACTIONS = {
     vim.api.nvim_echo({ { table.concat(M.status(vim.api.nvim_get_current_buf()), '\n') } }, false, {})
   end,
   enable = function()
-    require('zcmp').enable()
+    zcmp.enable()
   end,
   disable = function()
-    require('zcmp').disable()
+    zcmp.disable()
   end,
   reload = function()
-    require('zcmp').reload()
+    zcmp.reload()
   end,
 }
+
+local SUBCOMMANDS = vim.tbl_keys(ACTIONS)
+table.sort(SUBCOMMANDS)
 
 ---Take the command back out. |zcmp.disable()| deliberately leaves it, since
 ---`:ZCmp enable` is how you come back; used by tests.

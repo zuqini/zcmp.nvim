@@ -11,8 +11,9 @@ describe("'completeopt'", function()
     config.setup({})
 
     -- `preselect` is newer than the 0.12.0 floor; the rest has been there for
-    -- releases.
-    local expected = 'menuone,fuzzy,popup,noinsert'
+    -- releases. `noselect` is written even though 'autocomplete' forces it:
+    -- the menu vim.lsp.completion rebuilds through vim.fn.complete() does not.
+    local expected = 'menuone,fuzzy,popup,noinsert,noselect'
     assert.are.equal(buffer.can_preselect() and expected .. ',preselect' or expected, buffer.completeopt())
   end)
 
@@ -32,6 +33,7 @@ describe("'completeopt'", function()
     config.setup({ completion = { list = { selection = { preselect = false } } } })
 
     assert.is_nil(buffer.completeopt():find('preselect'))
+    assert.is_not_nil(buffer.completeopt():find('noselect'))
   end)
 
   it('drops fuzzy when fuzzy matching is off', function()
@@ -66,7 +68,7 @@ describe('global options', function()
 
   it('puts back what it found', function()
     local before = { completeopt = vim.go.completeopt, delay = vim.go.autocompletedelay }
-    config.setup({ completion = { trigger = { delay_ms = 50 } } })
+    config.setup({ completion = { menu = { auto_show_delay_ms = 50 } } })
 
     buffer.apply_globals()
     assert.are.equal(50, vim.go.autocompletedelay)
@@ -82,7 +84,7 @@ describe("'autocompletedelay'", function()
   -- 'autocomplete' off by the time it would: setup() would abandon the editor
   -- with core's own completion off and ZCmp not attached to anything.
   it('rounds a value the option would raise on', function()
-    config.setup({ completion = { trigger = { delay_ms = 12.5 } } })
+    config.setup({ completion = { menu = { auto_show_delay_ms = 12.5 } } })
 
     local notified = helpers.notifications(function()
       assert.has_no.errors(buffer.apply_globals)
@@ -92,23 +94,62 @@ describe("'autocompletedelay'", function()
     assert.is_true(helpers.notified(notified, 'delay_ms is milliseconds as a whole number'))
   end)
 
+  it('clamps a delay the option would refuse', function()
+    config.setup({ completion = { menu = { auto_show_delay_ms = 1e10 } } })
+
+    local notified = helpers.notifications(buffer.apply_globals)
+
+    assert.are.equal(2147483647, vim.go.autocompletedelay)
+    assert.is_true(helpers.notified(notified, 'delay_ms'))
+  end)
+
+  -- math.huge is a number `ms < math.huge` rejects outright, which used to
+  -- fall through to nil and silently keep whatever 'autocompletedelay' had
+  -- before -- rather than clamping like every other out-of-range value does.
+  it('clamps positive infinity the same way', function()
+    config.setup({ completion = { menu = { auto_show_delay_ms = math.huge } } })
+
+    local notified = helpers.notifications(buffer.apply_globals)
+
+    assert.are.equal(2147483647, vim.go.autocompletedelay)
+    assert.is_true(helpers.notified(notified, 'delay_ms'))
+  end)
+
+  it('clamps negative infinity to zero', function()
+    config.setup({ completion = { menu = { auto_show_delay_ms = -math.huge } } })
+
+    local notified = helpers.notifications(buffer.apply_globals)
+
+    assert.are.equal(0, vim.go.autocompletedelay)
+    assert.is_true(helpers.notified(notified, 'delay_ms'))
+  end)
+
   it('has no negative delay', function()
-    config.setup({ completion = { trigger = { delay_ms = -5 } } })
+    config.setup({ completion = { menu = { auto_show_delay_ms = -5 } } })
 
     helpers.notifications(buffer.apply_globals)
 
     assert.are.equal(0, vim.go.autocompletedelay)
   end)
 
-  it('keeps what was there when the value is no kind of number', function()
+  it('keeps what was there when the value is no kind of number to round', function()
     local before = vim.go.autocompletedelay
 
     helpers.notifications(function()
-      config.setup({ completion = { trigger = { delay_ms = '200' } } })
+      config.setup({ completion = { menu = { auto_show_delay_ms = 0 / 0 } } })
       buffer.apply_globals()
     end)
 
     assert.are.equal(before, vim.go.autocompletedelay)
+  end)
+
+  it('applies the default when config has thrown a wrong-typed value out', function()
+    helpers.notifications(function()
+      config.setup({ completion = { menu = { auto_show_delay_ms = '200' } } })
+      buffer.apply_globals()
+    end)
+
+    assert.are.equal(200, vim.go.autocompletedelay)
   end)
 end)
 
@@ -150,6 +191,26 @@ describe('attaching', function()
     buffer.attach(bufnr)
     vim.wait(100)
     assert.is_false(buffer.attached(bufnr))
+  end)
+
+  -- attach_all() -- setup() with buffers already open, :ZCmp reload, a
+  -- registration -- is exactly the path where the buffer being decided is
+  -- not the one on screen; a no-argument predicate must still see it.
+  it('runs `enabled` with the buffer being decided current, not whichever one is on screen', function()
+    config.setup({
+      enabled = function()
+        return vim.bo.filetype ~= 'lua'
+      end,
+      sources = { default = { 'buffer' } },
+    })
+    local lua_buf = helpers.buffer()
+    vim.bo[lua_buf].filetype = 'lua'
+    helpers.buffer() -- a second buffer, left current
+
+    buffer.attach(lua_buf)
+    vim.wait(100)
+
+    assert.is_false(buffer.attached(lua_buf))
   end)
 
   -- The single writer of 'complete': every pass derives the whole value, so a
@@ -223,6 +284,26 @@ describe('attaching', function()
     assert.is_false(buffer.attached(bufnr))
   end)
 
+  -- :bdelete fires LspDetach before BufDelete: the pass LspDetach schedules
+  -- lands after the detach, on a buffer that is still valid but unloaded.
+  it('does not take back a buffer that was unloaded before the schedule ran', function()
+    config.setup({ sources = { default = { 'buffer' } } })
+    local bufnr = helpers.buffer()
+    buffer.attach(bufnr)
+    vim.wait(100)
+    assert.is_true(buffer.attached(bufnr))
+
+    buffer.attach(bufnr)
+    vim.api.nvim_set_current_buf(helpers.buffer())
+    vim.api.nvim_buf_delete(bufnr, { unload = true, force = true })
+    buffer.detach(bufnr)
+    vim.wait(100)
+
+    assert.is_true(vim.api.nvim_buf_is_valid(bufnr))
+    assert.is_false(vim.api.nvim_buf_is_loaded(bufnr))
+    assert.is_false(buffer.attached(bufnr))
+  end)
+
   -- attach() schedules; detach_all() does not. Without a generation to check,
   -- the pending pass put back everything disable() had just taken.
   it('drops a pass that was scheduled before everything was detached', function()
@@ -256,6 +337,25 @@ describe('attaching', function()
     assert.are.equal(before, vim.bo[bufnr].complete)
     assert.are.same({}, keymap.installed(bufnr))
     assert.is_true(helpers.notified(notified, "'complete' would not take"))
+  end)
+
+  it('gives a buffer back when keymap.apply raises', function()
+    config.setup({})
+    local bufnr = helpers.buffer()
+    local before = { complete = vim.bo[bufnr].complete, autocomplete = vim.bo[bufnr].autocomplete }
+    helpers.stub(keymap, 'apply', function()
+      error('boom')
+    end)
+
+    local notified = helpers.notifications(function()
+      buffer.attach(bufnr)
+      vim.wait(100)
+    end)
+
+    assert.is_false(buffer.attached(bufnr))
+    assert.are.equal(before.complete, vim.bo[bufnr].complete)
+    assert.are.equal(before.autocomplete, vim.bo[bufnr].autocomplete)
+    assert.is_true(helpers.notified(notified, 'keymap.apply raised'))
   end)
 
   it('reports an `enabled` that raises rather than doing so on every BufEnter', function()

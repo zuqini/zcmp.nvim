@@ -21,5 +21,5 @@ max_line_length = false
 -- or a stub that quietly stopped being called is worth hearing about.
 files["tests"] = {
   std = "luajit+busted",
-  globals = { "vim", "_G" },
+  globals = { "vim" },
 }

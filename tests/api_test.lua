@@ -2,22 +2,57 @@ local api = require('zcmp.api')
 local config = require('zcmp.config')
 local helpers = require('helpers')
 
----A window standing in for the menu's documentation popup.
+---Fires CompleteDone the way real completion does, `v:event.reason` and
+---all -- `nvim_exec_autocmds()`'s own `data` opt lands in the callback's
+---`args.data`, not `vim.v.event`, which is what production code reads (see
+---`sources/snippets/init.lua`'s handler and `api.lua`'s `on_accept`).
+---`vim.v.event` is read-only through a plain assignment; `rawset` reaches
+---the same table underneath it, and reading it back afterwards sees the raw
+---field just as production code's read would.
+---@param reason? string Omitted for a CompleteDone with no reason at all
+local function complete_done(reason)
+  rawset(vim.v, 'event', reason and { reason = reason } or vim.empty_dict())
+  vim.api.nvim_exec_autocmds('CompleteDone', {})
+  rawset(vim.v, 'event', vim.empty_dict())
+end
+
+---Fires ModeChanged the way a mode transition does -- `pattern` here becomes
+---`args.match`, the `old_mode:new_mode` string `api.lua`'s `on_accept` reads
+---off it, not simulated as `v:event`. `on_accept`'s own registration is
+---buffer-scoped rather than pattern-scoped, so this reaches it as long as
+---the current buffer is the one it was registered against --
+---`nvim_exec_autocmds()` defaults to that buffer with no `buffer` opt of its
+---own.
+---@param pattern string
+local function mode_changed(pattern)
+  vim.api.nvim_exec_autocmds('ModeChanged', { pattern = pattern })
+end
+
+---A window standing in for one of |vim.lsp.util.open_floating_preview()|'s
+---floats. `focus_id` tags it the way core tags its own -- `'textDocument/hover'`
+---for `vim.lsp.buf.hover()`, `'textDocument/signatureHelp'` for
+---`vim.lsp.buf.signature_help()` -- so a test can hand `is_signature_visible()`
+---either shape.
+---@param focus_id? string
 ---@return integer
-local function popup()
+local function popup(focus_id)
   local bufnr = vim.api.nvim_create_buf(false, true)
   local lines = {}
   for i = 1, 200 do
     lines[i] = 'line ' .. i
   end
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-  return vim.api.nvim_open_win(bufnr, false, {
+  local win = vim.api.nvim_open_win(bufnr, false, {
     relative = 'editor',
     row = 1,
     col = 1,
     width = 20,
     height = 5,
   })
+  if focus_id then
+    vim.api.nvim_win_set_var(win, focus_id, bufnr)
+  end
+  return win
 end
 
 before_each(function()
@@ -87,10 +122,217 @@ describe('menu commands', function()
     end)
     assert.is_false(accepted)
 
-    vim.api.nvim_exec_autocmds('CompleteDone', {})
+    complete_done('accept')
     assert.is_true(accepted)
   end)
 
+  -- Every other user-supplied function in this codebase is pcall'd and
+  -- reported by name; a raising callback used to surface as Neovim's own
+  -- autocmd traceback through zcmp's frames with no mention of what armed it.
+  it('reports a raising accept callback instead of propagating', function()
+    helpers.pum({ selected = 0 })
+
+    helpers.keys(function()
+      api.accept({
+        callback = function()
+          error('boom')
+        end,
+      })
+    end)
+
+    local notified = helpers.notifications(function()
+      complete_done('accept')
+    end)
+    assert.is_true(helpers.notified(notified, 'zcmp: an accept callback raised: '))
+    assert.is_true(helpers.notified(notified, 'boom'))
+  end)
+
+  -- `cmp.hide(); return cmp.accept({ callback = f })` -- hide()'s <C-e> ends
+  -- the menu before accept()'s own <C-y> can, so the one CompleteDone this
+  -- produces is a `cancel`, not the accept the callback is documented to run
+  -- on. `on_accept()` is exercised directly here, at the reason CompleteDone
+  -- actually answers with, rather than through the batching that produces it
+  -- -- `fallback.batch`'s own describe block already covers the reordering.
+  -- A `cancel` means this feed's own <C-y> is never coming (it is
+  -- |i_CTRL-Y|, with no menu left to close and so no CompleteDone of its
+  -- own), so the arm must retire right there, without running the callback
+  -- -- and must not survive to be spent by whatever completes next.
+  it('does not run the callback on a cancel, and does not spend itself on a later unrelated accept', function()
+    helpers.pum({ selected = 0 })
+    local accepted = false
+
+    helpers.keys(function()
+      api.accept({
+        callback = function()
+          accepted = true
+        end,
+      })
+    end)
+
+    complete_done('cancel')
+    assert.is_false(accepted)
+    assert.are.equal(0, #vim.api.nvim_get_autocmds({ group = 'zcmp', event = 'CompleteDone' }))
+
+    -- A later, unrelated accept -- no callback requested for this one.
+    complete_done('accept')
+    assert.is_false(accepted)
+  end)
+
+  -- `vim.lsp.completion`'s `trigger()` fires exactly this while an accept is
+  -- in flight: a `vim.fn.complete()` restart on every server response, seen
+  -- as a `discard` CompleteDone with the menu still up. Routine in zcmp's
+  -- default config, and not a sign the accept this callback is waiting for
+  -- ever happened -- the callback must survive it and still fire on the
+  -- CompleteDone that is an accept.
+  it('survives an intervening discard CompleteDone and still fires on the real accept', function()
+    helpers.pum({ selected = 0 })
+    local calls = 0
+
+    helpers.keys(function()
+      api.accept({
+        callback = function()
+          calls = calls + 1
+        end,
+      })
+    end)
+
+    complete_done('discard')
+    assert.are.equal(0, calls)
+
+    complete_done('accept')
+    assert.are.equal(1, calls)
+  end)
+
+  -- The armed autocmd must not linger forever if no accept ever comes -- it
+  -- would otherwise fire for whatever completes next in the buffer. `<Esc>`
+  -- fires InsertLeave after the `discard` CompleteDone it produces.
+  it('gives up arming the callback once insert mode is left with no accept', function()
+    helpers.pum({ selected = 0 })
+    local calls = 0
+
+    helpers.keys(function()
+      api.accept({
+        callback = function()
+          calls = calls + 1
+        end,
+      })
+    end)
+
+    complete_done('discard')
+    vim.api.nvim_exec_autocmds('InsertLeave', {})
+    assert.are.equal(
+      0,
+      #vim.api.nvim_get_autocmds({ group = 'zcmp', event = { 'CompleteDone', 'InsertLeave', 'ModeChanged' } })
+    )
+
+    complete_done('accept')
+    assert.are.equal(0, calls)
+  end)
+
+  -- Measured on the 0.12.0 floor: <C-c> ends completion with a `discard`
+  -- CompleteDone too, but fires no InsertLeave -- only a ModeChanged out of
+  -- plain insert (`i`) into Normal (`n`). InsertLeave alone would leave the
+  -- arm live through a <C-c> exit; ModeChanged is the backstop that catches
+  -- it.
+  it('gives up arming the callback once insert mode is left via <C-c>, which fires no InsertLeave', function()
+    helpers.pum({ selected = 0 })
+    local calls = 0
+
+    helpers.keys(function()
+      api.accept({
+        callback = function()
+          calls = calls + 1
+        end,
+      })
+    end)
+
+    complete_done('discard')
+    -- The pum's own mode ('ic') closing back to plain insert is not a real
+    -- exit and must not retire the arm by itself.
+    mode_changed('ic:i')
+    assert.are.equal(1, #vim.api.nvim_get_autocmds({ group = 'zcmp', event = 'ModeChanged' }))
+
+    mode_changed('i:n')
+    assert.are.equal(
+      0,
+      #vim.api.nvim_get_autocmds({ group = 'zcmp', event = { 'CompleteDone', 'InsertLeave', 'ModeChanged' } })
+    )
+
+    complete_done('accept')
+    assert.are.equal(0, calls)
+  end)
+
+  -- Measured on the 0.12.0 floor: <Insert> then <C-c> lands in Replace mode
+  -- first, so the exit is `i:R` then `R:n`, never `i:n` -- and fires no
+  -- InsertLeave either. The widened `:n` suffix check is what catches this,
+  -- not just plain insert's own `i:n`.
+  it('gives up arming the callback on any ModeChanged into Normal, not only i:n', function()
+    helpers.pum({ selected = 0 })
+    local calls = 0
+
+    helpers.keys(function()
+      api.accept({
+        callback = function()
+          calls = calls + 1
+        end,
+      })
+    end)
+
+    complete_done('discard')
+    mode_changed('i:R')
+    assert.are.equal(1, #vim.api.nvim_get_autocmds({ group = 'zcmp', event = 'ModeChanged' }))
+
+    mode_changed('R:n')
+    assert.are.equal(
+      0,
+      #vim.api.nvim_get_autocmds({ group = 'zcmp', event = { 'CompleteDone', 'InsertLeave', 'ModeChanged' } })
+    )
+
+    complete_done('accept')
+    assert.are.equal(0, calls)
+  end)
+
+  -- Every arm is buffer-local, not the hand-rolled buffer comparison it
+  -- replaced: wiping the arm's buffer mid-completion must reap all three
+  -- autocmds, or the leaked ModeChanged compares dead buffer handles
+  -- forever -- buffer handles are monotonic and never reused, so that
+  -- comparison could never pass again.
+  it('does not survive its buffer being wiped', function()
+    helpers.pum({ selected = 0 })
+
+    helpers.keys(function()
+      api.accept({ callback = function() end })
+    end)
+    assert.are.equal(
+      3,
+      #vim.api.nvim_get_autocmds({ group = 'zcmp', event = { 'CompleteDone', 'InsertLeave', 'ModeChanged' } })
+    )
+
+    vim.api.nvim_buf_delete(vim.api.nvim_get_current_buf(), { force = true })
+    assert.are.equal(
+      0,
+      #vim.api.nvim_get_autocmds({ group = 'zcmp', event = { 'CompleteDone', 'InsertLeave', 'ModeChanged' } })
+    )
+  end)
+
+  -- `zcmp.disable()` deletes the `zcmp` augroup by name; a callback armed
+  -- through it must not outlive that, or it can fire for someone else's
+  -- completion once ZCmp has let go of the buffer.
+  it('arms the callback in the zcmp augroup, gone once zcmp is disabled', function()
+    helpers.pum({ selected = 0 })
+
+    helpers.keys(function()
+      api.accept({ callback = function() end })
+    end)
+    assert.are.equal(1, #vim.api.nvim_get_autocmds({ group = 'zcmp', event = 'CompleteDone' }))
+
+    require('zcmp').disable()
+    assert.is_false((pcall(vim.api.nvim_get_autocmds, { group = 'zcmp', event = 'CompleteDone' })))
+  end)
+
+  -- One <C-n> and nothing after it: the menu show() opens has nothing
+  -- selected unless a source marked an item, the same as one that opened by
+  -- itself -- a second <C-n> would select the first.
   it('opens the menu on request, but not when it is already up', function()
     helpers.pum(false)
     assert.are.same({ vim.keycode('<C-n>') }, helpers.keys(api.show))
@@ -240,5 +482,39 @@ describe('signature commands', function()
   it('reports no signature window when there is none', function()
     assert.is_false(api.is_signature_visible())
     assert.is_false(api.hide_signature())
+  end)
+
+  -- Without this, the shipped preset's `{ 'show_signature', 'hide_signature',
+  -- 'fallback' }` can never reach `hide_signature`: `show_signature` would
+  -- always answer true and re-ask for the same window instead of closing it.
+  it('declines to open a second time while the window is already up, so hide_signature can close it', function()
+    config.setup({ signature = { enabled = true } })
+    helpers.stub(vim.lsp, 'get_clients', function()
+      return { {} }
+    end)
+    local win = popup('textDocument/signatureHelp')
+    vim.b.lsp_floating_preview = win
+
+    assert.is_false(api.show_signature())
+    assert.is_true(api.hide_signature())
+  end)
+
+  -- `open_floating_preview()` sets `lsp_floating_preview` for every caller,
+  -- `vim.lsp.buf.hover()` included -- pressing `K` and then `<C-k>` must not
+  -- decline to ask for signature help, nor close the hover, on that basis
+  -- alone.
+  it('does not decline, and does not close, a hover float', function()
+    config.setup({ signature = { enabled = true } })
+    helpers.stub(vim.lsp, 'get_clients', function()
+      return { {} }
+    end)
+    helpers.stub(vim.lsp.buf, 'signature_help', function() end)
+    local win = popup('textDocument/hover')
+    vim.b.lsp_floating_preview = win
+
+    assert.is_false(api.is_signature_visible())
+    assert.is_true(api.show_signature())
+    assert.is_false(api.hide_signature())
+    assert.is_true(vim.api.nvim_win_is_valid(win))
   end)
 end)

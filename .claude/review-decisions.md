@@ -8,9 +8,9 @@ Most of this file was ported with the code from a Neovim config's `lua/plugins/l
 
 ## Recurring false flags
 
-## Decisions
+Raised on separate passes by different reviewers; each was re-examined and stands.
 
-## Both autotrigger and 'o' in 'complete' are on, and neither is redundant
+## Both autotrigger and the LSP omnifunc in 'complete' are on, and neither is redundant
 
 - Flagged: `lsp.attach()` calls `vim.lsp.completion.enable(..., { autotrigger = true })` *and* the `lsp` provider puts `o` in 'complete'. Two ways of asking the same server on the same keystroke; drop one.
 - Anchor: `lua/zcmp/lsp.lua` — `M.attach`; `lua/zcmp/config.lua` — the `lsp` provider
@@ -20,7 +20,44 @@ Most of this file was ported with the code from a Neovim config's `lua/plugins/l
   - Together: `l` gives `Field=1 Function=3 Keyword=1 Snippet=12 Text=172 Variable=1`, and `vim.tbl_g` still finds `tbl_get`.
 - The cost is some duplicate requests per keystroke, which `Context:cancel_pending_requests()` in `vim/lsp/completion.lua` already handles. Cheaper than either failure.
 - The trigger-character widening exists for the same reason: without every letter in `triggerCharacters`, autotrigger never fires on a plain keyword and the second half of this is dead.
+- History: the omnifunc half was the `o` flag until 2026-08-26. `o` runs whatever 'omnifunc' holds, and `vim.lsp.completion.enable()` never sets that option -- a user's or vim-go's omnifunc left there was served under the name "LSP". It is now `Fv:lua.vim.lsp.omnifunc`, the same function called directly; nothing measured above changes, only the dependency on the option's value is gone. The same day, `lsp.sync` began dropping and re-enabling every client of a buffer when one is newly wired: Neovim reads `triggerCharacters` and installs autotrigger only on a buffer handle's *first* `enable()`, and a synchronous `LspAttach` handler in the user's config -- the `:h lsp-attach` example -- runs before zcmp's scheduled attach and was creating that handle first, which left the autotrigger half dead with health reporting green. Reviewers reaching for "the widening is a no-op if the user enabled first" are describing the state before this.
+- The cost of that drop is on record too: `wired` now holds every client of the buffer, so `disable()` switches |vim.lsp.completion| off for a client the user's own handler enabled. There is no "is it on" query to make the restore precise, and the alternative -- skipping clients zcmp did not originally enable in `unwire` -- reintroduces the dead-autotrigger bug the drop exists to fix. Do not "fix" `unwire` that way; the docs say what `disable()` does.
+- History: 2026-08-27: both delivery paths carry the relocation the "appear twice" entry below records -- `Fv:lua.vim.lsp.omnifunc` routes into the same `trigger()` as autotrigger, so `autotrigger = false` does not avoid it -- and zcmp's own CompleteDone handler, `sources.trim_head()`, covers both. 2026-08-27: the autotrigger follows `completion.menu.auto_show` as well as the provider's own `opts.autotrigger`; `auto_show = false` had switched off only 'autocomplete'.
 - Revisit when: neovim#32428 lands. If `complete()` stops owning the cycle, `'o'` alone should cover both and autotrigger can go.
+
+## `<CR>` accepts only what a source preselected, and that is not a bug
+
+- Flagged: typing `alph` over `local alphabetical = 1` and pressing `<CR>` opens a line instead of accepting the buffer word, even though the menu is up with `alphabetical` in it. Reads as `accept` being broken.
+- Anchor: `lua/zcmp/api.lua` — `M.accept` / `has_selection`; `lua/zcmp/buffer.lua` — `M.completeopt`
+- Decision: correct as designed, and core's rule rather than ours. `'autocomplete'` forces `noselect` on; `preselect` in 'completeopt' overrides it *only* for items whose `preselect` field a source set (`:h 'completeopt'`). Our path source sets it, and `vim.lsp.completion` passes the server's through (`runtime/lua/vim/lsp/completion.lua`, `preselect = item.preselect`). Core's `.`/`w`/`b` scanners set nothing, so a buffer word is genuinely not selected and there is nothing for `accept` to take.
+- `select_and_accept` is the answer, and is why both exist: it takes the first item when none is selected. blink.cmp draws the same distinction for the same reason.
+- Do not "fix" this by dropping `noinsert` or `noselect`, which are load-bearing for the LSP path (`vim.lsp.completion` calls `vim.fn.complete()` itself and that path honours it -- without it `vim.` becomes `vim.F`), and do not reach for `preinsert`, which requires `fuzzy` to be unset.
+- Covered by `integration_test.lua`: `<CR>` accepts a preselected path item, opens a line with no selection, and takes the first buffer word when bound to `select_and_accept`; and, with a server attached, opens a line over a server item nothing marked, or takes it when bound to `select_and_accept`.
+- History: 2026-08-27: the LSP restart builds its menu through `vim.fn.complete()`, which selected the first item unless 'noselect' was set -- 'autocomplete' forced it, `complete()` did not -- so `completeopt` now carries `noselect` explicitly and both paths obey the rule above; the cost is Vim's `noinsert` rule that `<CR>` with nothing selected ends completion without a newline (`compl_enter_selects`), which `fallback.feed()` compensates by closing the menu ahead of a fed `<CR>`; the `<script>` route feeds a `<Plug>` for the rhs, so it asks the same question of the rhs itself, evaluating a `<script><expr>` rhs first so the question is asked of its value; `show()`'s own `<C-n>` obeys it too, so with nothing marked `<C-space><CR>` opens a line -- `select_and_accept` is the binding for taking the first item; the close reaches only a `<CR>` zcmp feeds, so `SHARED` maps `<CR>` to `{ 'fallback' }` in every preset but `none` -- Enter does what it did, through the feeder.
+
+## Keys fed from a mapping use the 'i' flag
+
+- Flagged: `nvim_feedkeys(keys, 'in', false)` -- the `i` ("insert before pending input") flag looks like cargo cult next to the usual `'n'`.
+- Anchor: `lua/zcmp/fallback.lua` — `feed` / `M.press`
+- Decision: load-bearing, and it was a real bug before. These keys *stand in for* the key that was pressed, so they belong in front of whatever is still queued. With `'n'`, a `<Tab>` pressed from a macro or `feedkeys()` sequence runs after the rest of the sequence: typing `<Tab>x` produced `x<Tab>` and a `<CR>` fallback interleaved into `zz60qIRED`. Found by the child-Neovim integration specs, which feed a whole sequence at once; a human typing one key at a time never sees it.
+- `escape_ks` is `false` on purpose too: the keys have already been through `vim.keycode()`, and escaping them again turns `<S-Tab>` and every other K_SPECIAL key into literal bytes.
+- History: 2026-08-27: api.lua's own feeder folded into `fallback.press`, so there is one feeder for this rather than two kept in sync by hand. 2026-08-27: the same route is the one call site pairing its own `vim.keycode()` with `escape = false` outside `press()`, because Vim's K_SELECT has no `<Key>` name and is appended as raw bytes. 2026-08-27: the flag has a cost of its own -- two feeds from one key press land in the reverse of the order they were made, since each goes to the front -- so `fallback.batch()` collects what a key's whole command list feeds and flushes it in reverse, each entry with its own flags; `keymap.lua`'s dispatcher opens one per press, `feed()` opens one around its own close-then-keys pair when none is open, and each queued feed says whether it ends completion (`hide`, `cancel`, `accept`, `select_and_accept`, and the close itself), so `needs_menu_closed()` asks the queue rather than matching bytes -- one already ahead of the `<CR>` stands in for the close, since a second one with no menu is `i_CTRL-E`; the byte match on `<C-e>` this replaced missed `select_and_accept()`'s `<C-n><C-y>`. Reviewers reaching for `'n'` here to get call order are trading this for the interleaving above.
+
+## The `nvim_buf_call` wrap around a user predicate is written twice
+
+- Flagged: reviewers reach for exporting `sources.in_buffer` so buffer.lua does not repeat three lines, or for inlining it so sources' surface stays domain-only.
+- Decision: two three-line copies, one per module that evaluates a user predicate (the top-level `enabled` in buffer.lua, a provider's `enabled`/`available` in sources), with the rationale stated once in sources and pointed at from buffer.
+- History: exported and imported by buffer.lua in 5036f28 (2026-08-27); inlined in be236ea after the "generic helper on a domain module" objection; asked to re-export in review round 8 the same day; settled as two copies. 2026-08-27: `sources.limit()` is exported from the same module -- not a counterexample: it is provider contract (a third-party module reading `opts.limit` has the same need, and docs/sources.md names it), while `in_buffer` has no caller outside zcmp.
+- Anchor: `lua/zcmp/buffer.lua` -- `wire`; `lua/zcmp/sources/init.lua` -- `in_buffer`.
+
+## Decisions
+
+## A shape alternative may be the literal `false`; consumers do not re-check a value's type
+
+- Flagged: reviewers reach for admitting `boolean` in a shape so `false` survives, then re-checking for `true` in the consuming module (keymap.lua, appearance.lua) -- the shape rule ends up in two files and reported at two different times.
+- Anchor: `lua/zcmp/config.lua` -- `SHAPES` / `prune`
+- Decision: `prune()` accepts a literal `false` in an alternatives list, so `true` is pruned and reported at `setup()` like every other wrong-typed value, and no module downstream of config checks a type again.
+- History: `keymap = false` admitted via `boolean` in be236ea (2026-08-27) with `true` dropped silently; keymap.lua reported it in 0a2aa7b; literal shape the same day.
 
 ## A word offered by both a server and the buffer can appear twice
 
@@ -29,7 +66,8 @@ Most of this file was ported with the code from a Neovim config's `lua/plugins/l
 - Decision: accepted, and not fixable from here. Core dedups identical words *across 'complete' sources*, which is why the flag sources never duplicate each other. LSP items do not arrive that way: `vim.lsp.completion`'s `trigger()` rebuilds the menu through `vim.fn.complete()`, keeping the previous items (ours, identified by having no `client_id`) and appending the fresh server ones with no comparison between the two sets -- see `runtime/lua/vim/lsp/completion.lua`, the `prev_matches` filter. The duplicate is structural to the reconstruction.
 - A previous engine did filter, with an `lsp_words()` reading `complete_info({'items'})` on every request -- measured at 2.1ms per response at 2k items and 11.5ms at 10k, and it still lagged a keystroke so duplicates showed anyway. Paying that to hide a cosmetic repeat is exactly the "work against core" this plugin exists to stop doing.
 - Filed: upstream, do not refile -- neovim/neovim#36166 (merged Oct 2025) deduplicates *within* LSP results; it does not compare them against non-LSP sources. The clean fix is upstream in `trigger()`, not here.
-- Revisit when: `trigger()` dedups `prev_matches` against the incoming set, or neovim#32428 lands and LSP stops going through `complete()` at all.
+- History: 2026-08-27: the same `prev_matches` restart also *relocates* every kept item to `server_start_boundary or word_boundary`, so an F source whose start is not `\k*$` -- zcmp's snippet and path sources -- had its accepted word inserted after its own head; each item now records its start in `user_data.zcmp_start`, and one `CompleteDone` handler of zcmp's own -- in the `zcmp` augroup, so `disable()` drops it -- trims the stale head with `sources.trim_head()`. The relocation is the restart zcmp switches on, not anything a source did, which is why the handler is not each source's. Not cosmetic; a third-party F source with a non-keyword start need only record the key; the default provider, zsnip, records no key, so `trim_head()` also derives the head from the text when the item carries none -- the text before the word ends with the word's own head, which must contain a non-keyword character -- and the keyed path stays for a fuzzily typed head; a server's own item is exempt from the text rule -- the restart places it, so it is never relocated, and its word may carry punctuation (`print(...)`).
+- Revisit when: `trigger()` dedups `prev_matches` against the incoming set, or `trigger()` re-completes kept items at their own start column, or neovim#32428 lands and LSP stops going through `complete()` at all.
 
 ## Buffer words and directory listings are core's, not ours
 
@@ -47,22 +85,6 @@ Most of this file was ported with the code from a Neovim config's `lua/plugins/l
 - Anchor: `lua/zcmp/sources/path.lua` — `M.items` / `split`
 - Decision: keep. `nil` means "the cursor is not in a path", which is the same question `split` answers for `M.start`; keeping the two in agreement is worth more than the line it saves.
 - History: this previously defended a third `nil`, `ctx.keyword ~= dir .. segment`, as "an assertion rather than a filter". **That was wrong, and the source was dead because of it.** `a:base` is the text located in the *first* call of a completion cycle (`:h complete-functions`) and is not re-derived on `refresh = 'always'` re-invocations, while `dir`/`segment` were recomputed from the live line. Measured in a pty: typing `abcd`, `findstart` is re-called each keystroke with the live line but `base` stays frozen at `"a"`. So the two disagreed on every keystroke after the first and `M.items` returned `nil` forever. Fixed by deriving from the live line and deleting the guard, which is why `M.items` takes no argument at all.
-
-## `<CR>` accepts only what a source preselected, and that is not a bug
-
-- Flagged: typing `alph` over `local alphabetical = 1` and pressing `<CR>` opens a line instead of accepting the buffer word, even though the menu is up with `alphabetical` in it. Reads as `accept` being broken.
-- Anchor: `lua/zcmp/api.lua` — `M.accept` / `has_selection`; `lua/zcmp/buffer.lua` — `M.completeopt`
-- Decision: correct as designed, and core's rule rather than ours. `'autocomplete'` forces `noselect` on; `preselect` in 'completeopt' overrides it *only* for items whose `preselect` field a source set (`:h 'completeopt'`). Our path source sets it, and `vim.lsp.completion` passes the server's through (`runtime/lua/vim/lsp/completion.lua`, `preselect = item.preselect`). Core's `.`/`w`/`b` scanners set nothing, so a buffer word is genuinely not selected and there is nothing for `accept` to take.
-- `select_and_accept` is the answer, and is why both exist: it takes the first item when none is selected. blink.cmp draws the same distinction for the same reason.
-- Do not "fix" this by dropping `noinsert`, which is load-bearing for the LSP path (`vim.lsp.completion` calls `vim.fn.complete()` itself and that path honours it -- without it `vim.` becomes `vim.F`), and do not reach for `preinsert`, which requires `fuzzy` to be unset.
-- Covered by `integration_test.lua`: `<CR>` accepts a preselected path item, opens a line with no selection, and takes the first buffer word when bound to `select_and_accept`.
-
-## Keys fed from a mapping use the 'i' flag
-
-- Flagged: `nvim_feedkeys(keys, 'in', false)` -- the `i` ("insert before pending input") flag looks like cargo cult next to the usual `'n'`.
-- Anchor: `lua/zcmp/api.lua` — `feed`; `lua/zcmp/fallback.lua` — `feed`
-- Decision: load-bearing, and it was a real bug before. These keys *stand in for* the key that was pressed, so they belong in front of whatever is still queued. With `'n'`, a `<Tab>` pressed from a macro or `feedkeys()` sequence runs after the rest of the sequence: typing `<Tab>x` produced `x<Tab>` and a `<CR>` fallback interleaved into `zz60qIRED`. Found by the child-Neovim integration specs, which feed a whole sequence at once; a human typing one key at a time never sees it.
-- `escape_ks` is `false` on purpose too: the keys have already been through `vim.keycode()`, and escaping them again turns `<S-Tab>` and every other K_SPECIAL key into literal bytes.
 
 ## `show_documentation()` does nothing and always returns false
 
@@ -87,12 +109,20 @@ Most of this file was ported with the code from a Neovim config's `lua/plugins/l
 - `vim.fn.expand('~root/')` does resolve it correctly (`/var/root/`), but `expand()` also applies wildcards, `%`, `#` and `$VAR`, and the token character class admits `$` -- so routing paths through it makes `$HOME/f` and a stray `%` expand as a side effect of a fix for a form of path that modern systems barely have. Not worth the surface.
 - Revisit when: `vim.fs.normalize` handles `~user` (it would then be a one-word change), or a user asks for it.
 
-## The snippets provider's default `opts` carry only `complete = false`
+## The snippets provider's default `opts` carry only coordination keys
 
 - Flagged (originally): every other built-in provider caps with `max_items`; the `snippets` one carried `limit = 30` in `opts` instead. Looks like an oversight.
 - Anchor: `lua/zcmp/config.lua` — the `snippets` provider
 - Decision (revised 2026-08): the default passes **no** `limit` and no `documentation` at all. zsnip resolves a `nil` field from its own `setup()`, so an explicit value here silently overrode the place a user actually configures snippets — `documentation = false` also fought zcmp's own `completion.documentation.auto_show = true`. Preferences belong to zsnip; the one key zcmp keeps is `complete = false`, which is coordination, not preference: `buffer.lua` is the single writer of `'complete'`, so zsnip must not append itself.
+- History: titled "carry only `complete = false`" until 2026-08-26, when `8ee9926` added `expand` -- which forwards an accepted zsnip item to `snippets.expand`, so the active preset applies to it. That is coordination on the same terms as `complete`: zcmp routing, not a snippet preference. The rule is unchanged: nothing in these `opts` that zsnip's own `setup()` is the place to say.
 - A user who *does* want a per-source override may still put `limit`/`documentation` in `opts` — they go to the module verbatim and beat zsnip's `setup()`, which is why the default must not use them. Do not re-flag the remaining asymmetry with `max_items`: `max_items` is core's `^{count}`, truncating after the source answers; a `limit` in `opts` truncates before the items are built.
+
+## A module's own cap is `opts.limit`; the provider's is `max_items`
+
+- Flagged: the two names for a cap look like an inconsistency.
+- Decision: `max_items` is the provider field (core's `^{count}`, after the source answers), `limit` is the module `opts` key every shipped module uses (before items are built); path was renamed 2026-08-26 to match the snippet adapters.
+- Anchor: `lua/zcmp/sources/path.lua` — `zcmp.PathOpts`; `lua/zcmp/sources/snippets/*.lua`.
+- History: 2026-08-27: both are range-checked by one private `whole()` in sources/init.lua -- a fraction rounds down with a warning, anything else warns and falls back; `sources.limit()` is the contract entry for modules.
 
 ## The `lsp` provider is the one wired by name from the buffer layer
 
@@ -118,3 +148,150 @@ Most of this file was ported with the code from a Neovim config's `lua/plugins/l
 - Layering registrations on top of the merged result would make `sources.default`'s rule and `per_filetype`'s rule disagree, and would leave no way to *remove* a source some plugin registered -- the list would grow monotonically with every plugin installed.
 - `inherit_defaults = true` is the additive form and is what a registration creates, so a user who wants both writes their own ids and inherits the rest.
 - Covered by `config_test.lua`: "replaces a filetype list a registration had added to", and "lets an explicit setup() win over an earlier registration" for the provider half.
+
+## A provider module is a singleton, started once by the first provider that names it
+
+- Flagged: `started` in `sources/init.lua` is keyed by module name, and every shipped module holds one module-level `options`. Two providers pointing at the same module with different `opts` -- the built-in `snippets` plus a user's own id, or one module in two `per_filetype` lists with different caps -- get one `enable(opts)`: the first resolved wins and the second's `opts` are silently ignored, while `:ZCmp status` shows both as active. Reviewers reach for keying `started` by provider id and passing `opts` to every `completefunc` call.
+- Anchor: `lua/zcmp/sources/init.lua` — `entries`; `lua/zcmp/sources/path.lua`, `lua/zcmp/sources/snippets/*.lua` — the module-level `options`
+- Decision: documented, not widened. A 'complete' entry names a function, not a function plus arguments -- `Fv:lua.require'm'.completefunc` carries nothing per provider -- so per-provider `opts` at call time would mean generating a distinct wrapper per provider id and registering it somewhere reachable from `v:lua`. That is a second registry for a case nobody has. A module *is* the unit 'complete' addresses; the contract says so (`docs/sources.md`), and a user who wants two configurations of one source writes two modules.
+- Revisit when: a user asks for the same module twice with different `opts`. Then the wrapper registry is worth its weight, and it should be designed for the provider contract as a whole rather than bolted onto `entries()`.
+
+## The path source recognises `/`-separated paths only
+
+- Flagged: `split()`'s character class admits neither `\` nor `:`, `resolve_dir()` treats only a leading `/` as absolute, and joins with `/` -- so on Windows `C:\Users\x\` and `C:/Users/x/` both fail to complete.
+- Anchor: `lua/zcmp/sources/path.lua` — `split` / `resolve_dir`
+- Decision: not supported, and said so in the docs rather than half-done in the code. Admitting `:` widens the token into `key: value` on every other line, and `\` is an escape character in every language the buffer is likely to hold; each needs its own rule for when it is a separator, and nothing here can be measured without a Windows machine. `getcompletion()` itself handles `/` on Windows, so a `/`-separated path still lists there.
+- Revisit when: a user on Windows asks. Then it is a rule per platform, feature-detected through `vim.fn.has('win32')`, with a test that runs there.
+
+## `disable()` does not undo a provider module's `enable()`
+
+- Flagged: after `zcmp.disable()` the `zcmp.snippets` CompleteDone/InsertLeave autocmds are still there, zsnip's own `enable()` state persists, and README promises "nothing you cannot take back". Reviewers reach for an `M.disable()` on the shipped snippet core called from `init.disable()`, or for a `disable()` in the provider contract.
+- Anchor: `lua/zcmp/init.lua` — `M.disable`; `lua/zcmp/sources/snippets/init.lua` — `M.enable`; `lua/zcmp/sources/init.lua` — `entries`
+- Decision: the contract has an `enable()` and no inverse, on purpose: it is a third party's module, `enable()` is required to be idempotent (a second `setup()` or `:ZCmp reload` calls it again), and a `disable()` nobody implements is a promise zcmp cannot keep for the modules it does not ship. What `disable()` gives back is everything zcmp itself wrote -- options, mappings, highlights, |vim.lsp.completion| -- and every one of those is restored and tested. A handler that only ever acts on `zcmp_snip` items is inert once 'complete' no longer names the source. `init.lua` reaching into one shipped module to tear down its augroup would be the one place `init` knows a source by name, for no user-visible gain.
+- History: 2026-08-27: the head trim the "appear twice" entry records began life in these handlers, one per module; it is now zcmp's own CompleteDone autocmd, since the relocation it undoes is zcmp's restart. The snippet core's group keeps its accept and InsertLeave duties; `path.lua` has no augroup at all.
+- Revisit when: a provider's `enable()` has a side effect a user can see with zcmp disabled. That is the point at which the contract grows a `disable()`, for every module at once.
+
+## The kind highlight is captured on `ColorSchemePre` and re-applied on `ColorScheme`
+
+- Flagged: a theme loaded through its own `load()` that fires `ColorScheme` without `ColorSchemePre` leaves `saved` holding the previous scheme's `PmenuKind`, so `disable()` restores that; and a `:colorscheme` that errors after `ColorSchemePre` leaves the kind column uncoloured until the next one. Reviewers reach for re-capturing on `ColorScheme`, which is what `forget()` did.
+- Anchor: `lua/zcmp/appearance.lua` — `M.apply` / `M.restore`; `lua/zcmp/init.lua` — the two ColorScheme autocmds
+- Decision: keep the pair. `forget()`-then-`apply()` on `ColorScheme` was a guess that a scheme redefined the two groups; one that left them alone had ZCmp's own colours captured as the ones to give back, which is a wrong restore on every `disable()`. `ColorSchemePre` restores before the scheme runs and `ColorScheme` applies after, which is exact whenever both fire -- and `:colorscheme` always fires both. A loader that fires only the second almost always begins with `hi clear`, which puts the groups back to the default link ZCmp captured anyway; a scheme that fails to source has already told the user so, and the next `:colorscheme` or `:ZCmp enable` re-applies.
+- Revisit when: a user reports a wrong restore from a loader that skips `ColorSchemePre`. Then the fix is to capture on `ColorScheme` only when the live value is not ZCmp's own -- comparable by the `fg`/`ctermfg` it wrote -- not to bring `forget()` back.
+
+## `kind_hl` is reported only when the group has no foreground on either channel
+
+- Flagged: with 'termguicolors' on, a group defined as `ctermfg` only passes the guard and colours nothing, and the reverse with it off. Reviewers reach for checking the channel the terminal will draw.
+- Anchor: `lua/zcmp/appearance.lua` — `M.apply`
+- Decision: either channel is enough. Checking the drawn one turns every gui-only colourscheme on a non-truecolor terminal into a ZCmp warning about a group that is no more invisible than the rest of that scheme, and the headless test runner has 'termguicolors' off. A group with a foreground on the other channel is the scheme's shape, not a `kind_hl` mistake; the warning is for a group that is empty, cleared or linked to nothing.
+
+## A function keymap entry receives the commands table, not the module
+
+- Flagged: reviewers reach for handing `require('zcmp')` to the function (blink.cmp hands its module) so `reload()` etc. are reachable.
+- Decision: it receives `zcmp.api` (the commands table); the docs on all three surfaces say so, and handing the module would give `keymap.lua` — an implementation detail — an edge into `init.lua` that can only be closed with a per-keypress lazy require.
+- History: 5fb9bf4 (2026-08-26) switched it to the module with no stated reason; reverted the same day.
+- Anchor: `lua/zcmp/keymap.lua` — the function-entry branch of the dispatcher.
+
+## `buffer.lua` is the lifecycle façade over `lsp.lua`; `init.lua` reaches `lsp.lua` only for `get_lsp_capabilities()`
+
+- Flagged: reviewers flag `init.lua` importing `lsp.lua` for per-buffer lifecycle work (LspDetach's synchronous `forget()`), or flag `buffer.lua` pass-throughs as needless indirection.
+- Decision: every per-buffer lifecycle call -- attach, detach, detach_all, sync, and the synchronous forget on LspDetach -- goes through `buffer.lua`, which owns the timing story (what is still attached while an event runs); `init.lua` stays API + autocmds and dispatches by event name. The one direct init->lsp edge is `get_lsp_capabilities()`, which is not lifecycle.
+- History: 21f5945 (2026-08-26) had `init.lua` call `lsp.forget()` directly; flagged in two consecutive review rounds; moved behind `buffer.forget_client` the same day.
+- Anchor: `lua/zcmp/init.lua` -- the autocmd callback; `lua/zcmp/buffer.lua` -- the lsp pass-throughs.
+
+## A fed result that contains its own key anywhere is fed non-remapped
+
+- Flagged: reviewers reach for feeding a function entry's string non-remapped altogether (safe, but drops blink's `t`-flag parity), or for a prefix-only guard (what `execute()` had, and what be236ea copied -- it hangs on `<C-g>u<CR>`).
+- Decision: fed keys are not counted by `'maxmapdepth'`, so there is no E223 to break a loop -- any occurrence of the lhs in the result is fed non-remapped, one rule for a captured rhs and a function entry's answer, in one helper. `<Plug>` still resolves under noremap.
+- History: prefix-only guard in `execute()` since the port; copied to `press()` in be236ea (2026-08-27) for the string-return path; widened to "anywhere" the same day after `<C-g>u<CR>` hung. 2026-08-27: `fallback.run`'s Select-mode route is the one caller that omits `lhs` from the guard on purpose -- `'<C-g>' .. lhs` contains the key by construction and the point of that feed is letting Vim resolve it; the code comment says so.
+- Anchor: `lua/zcmp/fallback.lua` -- the guard helper.
+
+## A displaced mapping that raises is reported by fallback, naming the key
+
+- Flagged: reviewers reach for letting the other plugin's error propagate as-is ("not zcmp's to swallow") or for `pcall` on only one of `execute()`'s branches.
+- Decision: every branch of `execute()` runs under `pcall` and reports `zcmp: the mapping for <lhs> raised: <err>` at ERROR level -- loud, but attributed to the key rather than to a traceback through zcmp's frames -- and feeds nothing.
+- History: the Vimscript branch was silent until 5c248ca (2026-08-27), then reported alone; the Lua branches raised through zcmp's frames; unified 2026-08-27.
+- Anchor: `lua/zcmp/fallback.lua` -- `execute`.
+
+## Every `__list` is compacted, and a wrong-typed element in one is dropped
+
+- Flagged: reviewers reach for keeping a wrong-typed element in place so `ipairs` does not stop at a hole, or for index-merging a list over the defaults.
+- Decision: `prune()` compacts every `__list`-shaped table it returns — a source list, a provider's `flags`, and a keymap entry's command list alike (the `cond and 'x' or nil` idiom leaves a hole that index-merging filled from the defaults — the source, flag or command the user switched off came back), so a wrong-typed element can be dropped like every other wrong value, and the docs say so.
+- History: kept in place through 2026-08-27's rounds ("pruning one would open a hole"); compacted and dropped the same day once the hole itself was found to be the bug — at the time, only for `sources.default` and a `per_filetype` list, whose shapes were already `__list`; widened the next day once `flags` and a keymap entry's command list turned out to have the identical hole through an opaque `table` shape (`flags = { '.', want and 'w' or nil, 'b' }` had the switched-off flag come back; `['<Tab>'] = { 'accept', want and 'snippet_forward' or nil, 'fallback' }` swallowed the key with the menu closed, `fallback` never reached). Compaction also moved inside `prune()` itself at that point, so a top-level call whose own `shapes` is `__list`-shaped (`add_filetype_source`'s) is compacted without a caller doing it by hand.
+- Anchor: `lua/zcmp/config.lua` — `prune`.
+
+## `:checkhealth zcmp` reports on the alternate buffer whenever it is valid
+
+- Flagged: reviewers reach for gating the alternate on `buftype == ''` (re-encodes the default `enabled`; wrong for a user whose `enabled` admits other buftypes) or on `buffer.attached()` (falls to the checkhealth scratch buffer in exactly the not-attached cases the check exists for).
+- Decision: the alternate is the buffer the user called from -- report on it whenever it is a valid buffer, and let `check_buffer()` say why it is not attached.
+- History: `buftype == ''` since the port; `buffer.attached()` in be236ea (2026-08-27); no predicate the same day.
+- Anchor: `lua/zcmp/health.lua` -- `subject`.
+
+## A non-table in `package.loaded` is dropped on the start path, before `require()`
+
+- Flagged: reviewers reach for clearing it where the not-a-table answer is found (so the fix takes on the next reload) or for never clearing it (so a query never re-runs a chunk).
+- Decision: the query path answers from whatever the loader cached and re-runs nothing; the start path -- `resolve()`, which `reset()` precedes on every `reload()`/`setup()` -- drops a cached non-table before asking `require()`, so the user's first reload after adding `return M` re-reads the file. Any non-table is dropped, not only a cached `true`: a chunk returning `'x'` is reported the same way as one that forgot `return M`, and stayed cached across a reload the same way until the check widened from `== true` to `type(...) ~= 'table'`.
+- History: cleared on the start path inside the not-a-table branch in 5ce0203 (2026-08-27) -- a query seen first meant a second reload; cleared on every pass in aedff1a -- a query re-ran the chunk; moved before `require()` on the start path the same day; widened from `== true` to any non-table on 2026-08-27.
+- Anchor: `lua/zcmp/sources/init.lua` -- `load`.
+
+## The keymap preset is merged in `keymap.lua`, per attach; its static checks run in `config.setup()` through `keymap.check()`
+
+- Flagged: `snippets.preset` is folded into `config.resolve()` while `keymap.preset` is applied inside `keymap.resolve()` on every `apply()`, so `ResolvedConfig.keymap` is the one field still in the user's shape; move the merge into config so both presets resolve in one layer.
+- Anchor: `lua/zcmp/keymap.lua` -- `PRESETS` / `M.resolve()` / `M.presets()`; `lua/zcmp/config.lua` -- `report_unknown_preset`
+- Decision: the merge stays in `keymap.lua`. Merging a user's entries over a preset has to dedup two spellings of one key through `vim.keycode` (`<C-Space>` and `<C-space>` are one mapping to Vim), and that is the mapper's knowledge, not a config shape rule; per-attach resolution is a few table walks. What the asymmetry actually cost was *when* a problem was reported -- at first attach, from a scheduled `wire()`, or at the keypress, instead of at `setup()` like the snippets one -- so every static check of the `setup()` keymap table (an unknown preset, a command after a terminal one, one key spelled twice, a name that is not a command or is a predicate) runs once at `config.setup()` through `keymap.check()`, lazy-required from config.lua, which exports `list_join` for the preset message rather than keeping a second copy; `resolve()` and `run()` are silent.
+- History: raised by the design reviewer on the repo-wide pass of 2026-08-27; report moved to `setup()` the same day. The next pass flagged the two other static checks of the setup() table -- a command after `fallback`, one key spelled twice -- on the same grounds; moved to `setup()` too, through `keymap.check()`, and `resolve()` is silent; the unknown-command-name check followed on the next pass.
+
+## A shipped module's `opts` are shaped by the module they reach, not the provider id
+
+- Flagged: the `lsp` provider's `autotrigger`/`extend_trigger_characters` were the one zcmp-owned setting nothing validated, and reviewers reach for a per-id shape.
+- Decision: `config.lua`'s `OPTS_SHAPES` is keyed on the effective module, read off the same `beneath(preset)` layer `resolve()` stacks -- the module of the layer the opts were written in: setup()'s own `module`, else the layer beneath it as `resolve()` stacks it (a registration replaces the shipped provider wholesale, so a registration's opts are shaped by the registration's module and nothing else). `zcmp.lsp`, `zcmp.sources.path` and the two shipped snippet adapters (`zcmp.sources.snippets.luasnip`, `zcmp.sources.snippets.nvim_snippets`) are shaped; a provider pointed at anything else keeps its opts opaque. `zsnip.complete`'s keys are not zcmp's, so the default snippets provider's `opts` stay opaque. A provider's `opts` follow its module: re-pointed at another module it drops the shipped module's default `opts` (on the rule the luasnip preset already follows by replacing the provider wholesale), and re-pointed back at the shipped default's module -- `zsnip.complete` over the luasnip preset -- it gets the shipped default's `opts` back, since the default `expand` opt exists precisely so a preset still applies to zsnip.
+- Anchor: `lua/zcmp/config.lua` -- `OPTS_SHAPES` / `prune_shipped_opts` / `beneath` / `drop_repointed_opts`.
+- History: 2026-08-27: first cut read the module from DEFAULTS only and missed registrations and the luasnip preset; the adapters were added once the lookup matched `resolve()`; the registration layer was modelled as merged until the next pass noted `apply_additions` replaces, and `zcmp.sources.path` joined the shapes; `effective_module()` was then replaced by reading the module off the same `beneath(preset)` layer `resolve()` stacks.
+
+## `api.lua` names the `zcmp` augroup by its literal, as `init.lua` does
+
+- Flagged: `on_accept` calls `nvim_create_augroup('zcmp', { clear = false })` while `init.lua` holds the same name in a `GROUP` local -- one string, two definitions. Reviewers reach for exporting `GROUP` so there is a single owner.
+- Anchor: `lua/zcmp/api.lua` -- `on_accept`; `lua/zcmp/init.lua` -- `GROUP`
+- Decision: two copies, with the rationale stated at the `api.lua` site. `init.lua` requires `api.lua` at its own top, so `api.lua` cannot require it back to read the name; the remaining options are to invert ownership (`api.GROUP`, read by the lifecycle module that actually creates and deletes the group) or to add a module holding one string. Both cost more than the literal does. This is the same trade already settled for the `nvim_buf_call` predicate wrap -- two copies, one rationale, pointed at from the second site -- and `sources/snippets/init.lua` likewise keeps its own `GROUP` local for `zcmp.snippets`.
+- `clear = false` is the load-bearing half, not the name: it joins the group `init.lua` created rather than wiping the autocmds already in it, and `disable()`'s `nvim_del_augroup_by_name` drops the one-shot with everything else. Do not "fix" this by creating the group with `clear = true`.
+- History: 2026-08-30: the one-shot moved into the group in the same change that gave it a `vim.v.event.reason == 'accept'` filter -- before that it was ungrouped and `disable()` left it armed.
+
+## `api.lua` names its predicates and its feeder locally, even when the body is one call
+
+- Flagged: `feed()` is `fallback.press()` with nothing added; `pumvisible()` and `has_selection()` became pure renames of `fallback.menu_visible()`/`fallback.has_selection()` once the menu-state rule moved to one home. Reviewers reach for deleting the locals and calling through at each site, on the grounds that a grep for the export then finds the call sites.
+- Anchor: `lua/zcmp/api.lua` -- `feed`, `pumvisible`, `has_selection`, next to `inserting`, `selecting`, `snippets`
+- Decision: keep the locals. They are one house pattern, not three accidents: every question a command body asks has a short local name, so the body reads as the sentence the command is -- `if not pumvisible() then return false end`, not `if not fallback.menu_visible() then`. `inserting()`, `selecting()` and `snippets()` are the same shape and nobody has flagged those; the two that became one-line delegates did so because the rule behind them moved out, which is the fix working, not a smell it left behind.
+- The grep objection is real but small, and it cuts both ways: the names in `api.lua` are the vocabulary the commands are written in, and renaming seven call sites to spell the module edge would make the commands read as plumbing. A reader chasing the selection rule has one hop from either end, and the docstring on the locals names the module they defer to.
+- History: raised as `feed` in review round 1 (2026-08-30), then as `pumvisible`/`has_selection` in round 2 the same day by a different reviewer, each time as a nitpick. Settled as the pattern rather than re-argued per local.
+
+## An accept's callback is armed per key press, not from handlers installed once at `enable()`
+
+- Flagged: `on_accept` registers three autocmds and a `retire()` closure over their ids on every `accept()`/`select_and_accept()` that carries a callback, while `sources/snippets/init.lua` solves a similar accept-only-on-CompleteDone plus drop-state-on-InsertLeave problem with two handlers installed once at `enable()` and a module-local slot. Reviewers reach for the same shape here -- `armed = { callback, bufnr }`, handlers installed once, `retire()` becoming `armed = nil` -- usually via a new `zcmp.accept` module, since `api.lua` cannot export the installer (see the namespace note below).
+- Anchor: `lua/zcmp/api.lua` -- `on_accept`; compare `lua/zcmp/sources/snippets/init.lua` -- `M.enable`
+- Decision: keep the per-press arm. The two are not the same problem. The snippet handler is *stateless per completion* -- it asks `v:completed_item` what happened and needs no memory of which key started it -- so one installed handler serves every item. An accept's callback belongs to one specific press: it must run for that feed's own accept and no other, which is exactly the state a slot would have to hold, and a slot holds one. Two arms live at once (reachable from a hand-written entry) would have to either stack or silently replace, and replacing loses a callback the caller was promised.
+- The correctness cost the restructure was proposed to fix is gone: all three registrations are now `buffer = 0`, so Neovim reaps them together with the buffer. The earlier non-uniform version -- two buffer-local and a global `ModeChanged` re-deriving buffer scope by hand -- did strand its third handler on a buffer wipe, and that was the real defect, not the per-press shape.
+- The `pattern`-versus-`buffer` conflict that justified the hand-rolled check is real (`nvim_create_autocmd` rejects them together) but the conclusion drawn from it was wrong: a buffer-scoped `ModeChanged` still carries `old:new` in `args.match`. Measured on the 0.12.0 floor -- registered with `buffer`, it fires only while that buffer is current, and `nvim_get_autocmds` returns nothing for it after the buffer is wiped. Do not reintroduce the pattern form to get the mode string.
+- Cost accepted: three `nvim_create_autocmd` calls per accept-with-callback. Only a keymap that asks for a callback pays it, and only on the press.
+- History: `on_accept` was rewritten in three consecutive review rounds (2026-08-30) -- ungrouped one-shot with no reason filter; one-shot plus reason filter, which dropped the callback when the LSP restart's `discard` arrived first; stay-armed-until-accept, which spent the arm on an unrelated later accept; then the reason switch plus backstops it has now. Each rewrite of the whole shape produced the next round's regression, which is why the fourth round took the three-line scope fix over a fourth restructure.
+- Revisit when: a second consumer needs to arm one, or `once = true` gains a "only if the callback ran" semantic upstream.
+
+## `api.lua`'s function-export surface is `keymap.lua`'s command namespace
+
+- Flagged: nothing declares that adding a function to `api.lua`'s `M` makes it a name a user can bind to a key. Reviewers meet this the other way round -- proposing an exported helper for another module to call -- and only then find that `keymap.check()` would validate it as a legitimate command.
+- Anchor: `lua/zcmp/api.lua` -- the header and `M.predicates`; `lua/zcmp/keymap.lua` -- `resolve_command`
+- Decision: stated at both ends rather than enforced by a registry. `resolve_command()` looks up `commands[command]` against the whole module and `check()` accepts any name where `type(commands[name]) == 'function'`, so the surface *is* the namespace; the header now says so, and the lookup points back at it. A helper another module needs stays a local. A symmetric table to `predicates` -- an explicit set of bindable names -- would enforce it, at the cost of a second list to keep in step with the functions themselves, which is the failure mode the `predicates` list already has to be watched for.
+
+## `sources/init.lua` asks `lsp.lua` whether a relocation was possible, without going through `buffer.lua`
+
+- Flagged: `trim_head()` calls `require('zcmp.lsp').may_relocate(...)` directly, which reads like a breach of `## buffer.lua is the lifecycle façade over lsp.lua` and adds a fourth inbound edge to the module `## The lsp provider is the one wired by name from the buffer layer` already notes has three.
+- Anchor: `lua/zcmp/sources/init.lua` -- `M.trim_head`; `lua/zcmp/lsp.lua` -- `M.may_relocate`
+- Decision: allowed, because the façade entry is about *lifecycle traffic* -- attach, detach, detach_all, sync, and the synchronous forget -- all of which mutate per-buffer state and need the timing story `buffer.lua` owns. `may_relocate()` mutates nothing and has no timing story; it is the same shape as `config.lua`'s `available` closure, which has reached `lsp.lua` directly since before either entry was written. A pass-through on `buffer.lua` would add a hop that owns no decision.
+- The question had to move to `lsp.lua` rather than stay in sources because `lsp.lua` owns *both* facts it needs: the `wired` table, and `M.source()`, whose entry is the second route. Neither is visible from sources without duplicating something.
+- **Zcmp reaches `vim.lsp.completion`'s restart by three routes, and the predicate must be their union.** Route 1 is `vim.lsp.completion.enable()`, which `wired[bufnr]` records. Route 2 is `M.source()`'s `Fv:lua.vim.lsp.omnifunc` entry in 'complete': Neovim's `M._omnifunc()` calls `trigger()` directly with no `buf_handles` lookup -- unlike `M.get()`, it never consults whether anyone called `enable()` -- so it relocates with `wired` empty. Measured: the `zcmp.lsp` module reached under any provider id other than `'lsp'` puts that same entry in 'complete' while `sync()` wires nothing, and an accepted zsnip item came out `console.console.log`. Route 3 is a plain `o` flag in 'complete' while 'omnifunc' holds `v:lua.vim.lsp.omnifunc` -- Neovim's own LSP attach handler writes that option for a completion-capable client whose 'omnifunc' is empty or default (`runtime/lua/vim/lsp.lua`), so `o` reaches the same `trigger()` under a name `M.source()` cannot spell. Measured: `sources.default = { 'omni', 'snip' }` with `omni = { flags = { 'o' } }` left `console.LOGBODY` in the buffer while the control `{ 'lsp', 'snip' }` gave `LOGBODY`. `o` was zcmp's own spelling of this source until 2026-08-26, so a config pinned from that era lands on route 3 directly.
+- Route 3 tests the *value* of 'omnifunc', not merely the flag's presence: an `o` over a user's or another plugin's omnifunc has no route to `trigger()` at all, so testing the flag alone would reopen the false positive. **The value comes in two shapes and both must be admitted**: the 0.12 floor writes the name (`M.source()`'s string with the leading `F` stripped, reused rather than spelled a second time), and 0.13+ assigns the function object `vim.lsp.omnifunc` itself (`runtime/lua/vim/lsp.lua`). Matching only the name made route 3 permanently false on 0.13 -- measured, `console.console.log` on nightly against `console.log` on the floor. A test that sets 'omnifunc' by hand cannot catch this; the option only takes a function value on 0.13+, so the regression test feature-detects rather than asserting one shape.
+- Do not narrow this back to `wired` alone, and do not widen it to `available()` alone. `available()` answers "a client is attached", which is true for one kept for hover or diagnostics with no route to the restart at all; `wired` misses routes 2 and 3. Both errors are text corruption, in opposite directions: a false negative leaves a stale head, a false positive eats a byte the user typed.
+- **`M.available(bufnr)` must stay ahead of every `vim.bo[bufnr]` read in this function.** For an invalid or deleted buffer `get_clients({ bufnr = ... })` answers `{}` and short-circuits, while `vim.bo[bufnr].complete` raises `Invalid buffer id`. The ordering is the guard; do not reorder it.
+- Do not reach for `sources.provider(0, 'lsp')` instead. It is exact for zcmp's own wiring but names `'lsp'` by literal a second time, which the buffer-layer entry deliberately confines to one site -- and it would still miss route 2 under a renamed id, which is the case that motivated the union.
+- The route-2 check is built from `M.source()` itself and matched as a whole comma-separated element (`entry` or `entry^N`, the `max_items` suffix), never a substring, so the entry checked for and the entry emitted cannot drift.
+- `wired` is keyed by real buffer numbers, not the API's `0`-means-current convention, so the call site passes `nvim_get_current_buf()`. Passing `0` type-checks and silently answers false for every buffer, disabling the trim outright.
+- Residual, and unknowable: a third party calling `vim.lsp.completion.enable()` itself with no `lsp` provider entry in 'complete' answers false. `wired` never records that call and 'complete' never names it, so it cannot be told apart from a client attached for hover alone.
+- History: 2026-08-31, route 3 was found dead on 0.13+ -- core changed 'omnifunc' from the name to the function value, and the string comparison silently stopped matching. Fixed by admitting both shapes. This is the fifth correction to this predicate, and again it was measurement rather than argument that found it. 2026-08-30, over four rounds. First an unconditional trim, which ate a typed byte with no server at all; then an inlined `get_clients()` copy, which was a safe over-approximation but duplicated `lsp.available()` and left the false positive open for a buffer whose source list drops the `lsp` provider; then `wired` alone, which fixed that and *introduced a false negative* -- a regression, since the `get_clients` form had answered correctly for route 2. Then the two-route union, which still missed the `o` flag -- found the next round by the same method, measurement rather than reasoning. Every revision of this predicate has been corrected by measuring which core code path actually runs; none was corrected by argument. The union is tighter than the `get_clients` form and has no false negative for any of zcmp's own routes.

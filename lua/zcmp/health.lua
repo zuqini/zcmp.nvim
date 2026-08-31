@@ -6,14 +6,40 @@
 ---`:checkhealth zcmp` — nothing registers it.
 
 local buffer = require('zcmp.buffer')
+local config = require('zcmp.config')
 local keymap = require('zcmp.keymap')
 local sources = require('zcmp.sources')
+local zcmp = require('zcmp')
 
 local M = {}
 
 local ISSUES_URL = 'https://github.com/zuqini/zcmp.nvim/issues'
 
 local MINIMAL_CONFIG = "require('zcmp').setup()"
+
+---Shared by both 'completeopt' mismatch warnings -- global-slot, in
+---check_setup(), and local-slot, in check_buffer(). Only the diagnosis (why
+---it does not match) differs between them; what it costs does not.
+local COMPLETEOPT_CONSEQUENCE = {
+  'The menu still works; selection and the documentation popup may not',
+  'behave as configured.',
+}
+
+---What un-disables completion, for whichever section needs to say so.
+---`:ZCmp` exists only once `setup()` has run and created it, which is what
+---tells "never set up" (the command itself is missing) apart from "set up,
+---then `:ZCmp disable`" (the command is there and is the fix). `:ZCmp`
+---existing is a proxy for "setup() has run" -- owned by commands.lua and
+---init.lua -- so if the command ever moves to `plugin/zcmp.lua` (created
+---unconditionally, before any `setup()` call), this check must change with
+---it.
+---@return string
+local function remedy()
+  if vim.fn.exists(':ZCmp') == 2 then
+    return ':ZCmp enable'
+  end
+  return MINIMAL_CONFIG
+end
 
 ---Engines that also write 'complete', map insert mode or call complete().
 local RIVALS = {
@@ -25,7 +51,7 @@ local RIVALS = {
 local function check_environment()
   vim.health.start('Environment')
 
-  vim.health.info('zcmp ' .. require('zcmp').version)
+  vim.health.info('zcmp ' .. zcmp.version)
 
   if vim.fn.has('nvim-0.12') == 1 then
     vim.health.ok('Neovim ' .. tostring(vim.version()) .. ' (>= 0.12.0 required)')
@@ -49,29 +75,39 @@ end
 local function check_setup()
   vim.health.start('Setup')
 
-  if require('zcmp').is_enabled() then
+  local enabled = zcmp.is_enabled()
+  if enabled then
     vim.health.ok('enabled')
   else
     vim.health.warn('not enabled — nothing has taken over completion', {
-      MINIMAL_CONFIG,
+      remedy(),
     })
   end
 
-  local expected = buffer.completeopt()
-  if vim.o.completeopt == expected then
-    vim.health.ok("'completeopt' = " .. vim.o.completeopt)
-  else
-    vim.health.warn(("'completeopt' is %q, not the %q this config asks for"):format(vim.o.completeopt, expected), {
-      'Something set it after zcmp did. The menu still works; selection and',
-      'the documentation popup may not behave as configured.',
-    })
+  -- Not enabled means zcmp never set 'completeopt', so comparing it here
+  -- would blame zcmp for a value it had no part in; the warning above already
+  -- covers that case.
+  if enabled then
+    local expected = buffer.completeopt()
+    -- 'completeopt' is global-local; vim.o reads the effective value for
+    -- whichever buffer is current, which here is checkhealth's own scratch
+    -- buffer. apply_globals() writes the global slot, so that is what to
+    -- compare against.
+    if vim.go.completeopt == expected then
+      vim.health.ok("'completeopt' = " .. vim.go.completeopt)
+    else
+      vim.health.warn(
+        ("'completeopt' is %q, not the %q this config asks for"):format(vim.go.completeopt, expected),
+        vim.list_extend({ 'Something set it after zcmp did.' }, COMPLETEOPT_CONSEQUENCE)
+      )
+    end
   end
 
   vim.health.info(("'autocompletedelay' = %d"):format(vim.o.autocompletedelay))
 
   -- The flag is newer than the 0.12.0 floor, and without it nothing is ever
   -- selected while the menu opens by itself.
-  if require('zcmp.config').options.completion.list.selection.preselect and not buffer.can_preselect() then
+  if config.options.completion.list.selection.preselect and not buffer.can_preselect() then
     vim.health.warn("this Neovim has no `preselect` in 'completeopt'", {
       'Nothing is selected while `completion.menu.auto_show` is on, so a key',
       'bound to `accept` never fires. Bind `select_and_accept` instead, or',
@@ -85,7 +121,12 @@ local function check_sources(bufnr)
 
   local resolved = sources.list(bufnr)
   if #resolved == 0 then
-    vim.health.error('no sources — `sources.default` is empty')
+    local _, filetype = sources.ids(bufnr)
+    if not filetype then
+      vim.health.error('no sources — `sources.default` is empty')
+    else
+      vim.health.info(('no sources — `sources.per_filetype.%s` is empty'):format(filetype))
+    end
     return
   end
 
@@ -111,9 +152,14 @@ local function check_buffer(bufnr)
   vim.health.start(('Buffer %d%s'):format(bufnr, name ~= '' and ' — ' .. vim.fn.fnamemodify(name, ':~:.') or ''))
 
   if not buffer.attached(bufnr) then
-    vim.health.warn('zcmp is not attached here', {
-      ('buftype is %q; the `enabled` option decides which buffers zcmp drives.'):format(vim.bo[bufnr].buftype),
-    })
+    local hint
+    if not zcmp.is_enabled() then
+      hint = ('zcmp is disabled -- `%s`'):format(remedy())
+    else
+      hint = ("the `enabled` option answered false here (buftype %q), or an earlier pass reported an error")
+        :format(vim.bo[bufnr].buftype)
+    end
+    vim.health.warn('zcmp is not attached here', { hint })
     return
   end
 
@@ -124,12 +170,27 @@ local function check_buffer(bufnr)
     vim.health.info("'autocomplete' is off — the menu opens on the key bound to `show`")
   end
 
+  -- 'completeopt' is global-local: check_setup() compares the global slot,
+  -- and says nothing about a `setlocal completeopt` sitting in this one.
+  -- vim.bo[bufnr] reads the raw local value, empty when none is set.
+  local local_completeopt = vim.bo[bufnr].completeopt
+  if local_completeopt ~= '' and local_completeopt ~= buffer.completeopt() then
+    vim.health.warn(
+      ("'completeopt' is set locally to %q, not this config's %q"):format(local_completeopt, buffer.completeopt()),
+      vim.list_extend({
+        -- zcmp never writes the local slot -- a ftplugin or an autocmd's
+        -- `setlocal` reached this buffer before zcmp attached, not after.
+        ':setlocal completeopt< drops the local value; or set it to match.',
+      }, COMPLETEOPT_CONSEQUENCE)
+    )
+  end
+
   local keys = {}
   for _, key in ipairs(keymap.installed(bufnr)) do
     keys[#keys + 1] = key.lhs
   end
   if #keys == 0 then
-    vim.health.warn('no keys mapped — `keymap.preset` is "none" and nothing was added')
+    vim.health.warn('no keys mapped — every entry is empty, or `keymap.preset` is "none"')
   else
     vim.health.info('keys: ' .. table.concat(keys, ' '))
   end
@@ -174,11 +235,15 @@ end
 
 ---`:checkhealth` runs the check inside its own `nofile` buffer, which zcmp
 ---never drives -- reporting on that one would warn every time. The alternate
----buffer is the one it was called from.
+---buffer is the one it was called from, reported whenever it is a valid
+---buffer at all: gating on `buffer.attached()` would fall back to the
+---checkhealth scratch buffer in exactly the not-attached cases (disabled,
+---excluded by a custom `enabled`, a buftype `check_buffer()` warns about)
+---that this check exists to explain.
 ---@return integer
 local function subject()
   local alternate = vim.fn.bufnr('#')
-  if alternate ~= -1 and vim.api.nvim_buf_is_valid(alternate) and vim.bo[alternate].buftype == '' then
+  if alternate ~= -1 and vim.api.nvim_buf_is_valid(alternate) then
     return alternate
   end
   return vim.api.nvim_get_current_buf()

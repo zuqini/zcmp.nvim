@@ -96,4 +96,33 @@ describe(':ZCmp status', function()
 
     assert.is_true(table.concat(commands.status(bufnr), '\n'):find('i:<CR>', 1, true) ~= nil)
   end)
+
+  -- 'autocomplete' is global-local, so `vim.bo[bufnr].autocomplete` -- the
+  -- local slot alone -- is nil in a buffer zcmp never attached to, even
+  -- though 'set autocomplete?' would report the global value there.
+  it("reports the effective 'autocomplete' in a buffer it does not drive", function()
+    require('zcmp').setup({})
+    local bufnr = helpers.buffer()
+    vim.bo[bufnr].buftype = 'nofile'
+    helpers.settle(bufnr)
+
+    assert.is_false(require('zcmp.buffer').attached(bufnr))
+    assert.is_true(table.concat(commands.status(bufnr), '\n'):find("'autocomplete' false", 1, true) ~= nil)
+  end)
+
+  -- 'completeopt' is global-local too: reading `vim.o.completeopt` outside
+  -- the `bufnr` nvim_buf_call reports whichever buffer is current when
+  -- status() runs, not the one it was asked about.
+  it("reports 'completeopt' for the buffer asked about, not the current one", function()
+    require('zcmp').setup({})
+    local bufnr = helpers.buffer()
+    helpers.settle(bufnr)
+
+    local other = helpers.buffer()
+    vim.bo[other].completeopt = 'menu'
+    vim.api.nvim_set_current_buf(other)
+
+    local status = table.concat(commands.status(bufnr), '\n')
+    assert.is_true(status:find("'completeopt' " .. require('zcmp.buffer').completeopt(), 1, true) ~= nil)
+  end)
 end)

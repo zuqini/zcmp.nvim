@@ -17,30 +17,52 @@ require('zcmp').setup({ keymap = { preset = 'enter' } })
 ```
 
 An unknown key, or a known one of the wrong type, is reported with
-`vim.notify` and otherwise ignored. A table-shaped option handed a scalar
-keeps its default, so a config that is wrong in one place still gets the rest.
+`vim.notify` and otherwise ignored. A table-shaped option handed a scalar,
+or a scalar leaf handed the wrong type, keeps its default rather than
+landing in the resolved config, so a config that is wrong in one place still
+gets the rest; every list-shaped option (`sources.default`, a `per_filetype`
+list, a provider's `flags`, a keymap entry's command list) is checked element
+by element and compacted afterwards, so a wrong-typed element is reported and
+dropped like any other wrong-typed value, and the rest keep their order; a
+`nil` in the list (the `cond and 'x' or nil` idiom) is simply absent, rather
+than a hole the defaults get merged into. A `keymap.preset` that is not one
+of the four is reported the same way, and falls back to `default`; so are a
+command written after `fallback` in a keymap entry, one key spelled twice,
+and a name that is not a command (or is a predicate such as `is_visible`).
+`setup()` handed anything but a table warns and falls
+back to the defaults.
 
 ### `zcmp.enable()`
 
 Take over completion: write the options, install the autocmds, and attach to
 every buffer already open. `setup()` calls it; call it yourself only after
-`disable()`. Below Neovim 0.12.0 it reports that and wires nothing, rather than
-failing on the first option this Neovim does not have.
+`disable()`. Also re-runs every provider module's `enable(opts)`, same as
+`setup()` and `zcmp.reload()`. Below Neovim 0.12.0 it reports that and wires
+nothing, rather than failing on the first option this Neovim does not have.
 
 ### `zcmp.disable()`
 
 Hand completion back. Mappings are removed and whatever they displaced is put
-back, buffers get the `'complete'` and `'autocomplete'` they had before, and
-the global options ZCmp wrote are restored.
+back, buffers get the `'complete'` and `'autocomplete'` they had before, the
+global options ZCmp wrote and the two `PmenuKind*` highlight groups are
+restored, trigger characters are put back as the server declared them, and
+`vim.lsp.completion` is switched off for every client of a buffer ZCmp drove
+— whoever switched it on. ZCmp owns that wiring in its buffers, and nothing
+reports whether a client had it before; a config that enabled it itself is
+one that should not have (see [LSP](../README.md#lsp)).
 
 ### `zcmp.is_enabled()` → `boolean`
+
+Whether `enable()` has run and `disable()` has not — the engine switch, for
+every buffer alike. Not blink.cmp's `is_enabled()`, which evaluates the
+`enabled` predicate for the current buffer; `:ZCmp status` reports that (as
+"attached"/"not attached") for the current one.
 
 ### `zcmp.reload()`
 
 Re-derive `'complete'` in every buffer zcmp drives, and start any provider
-module that has arrived since. What `:ZCmp reload` runs. While disabled it only
-forgets which modules have started, so that enabling again starts them — it
-never takes a buffer back that `disable()` has given up.
+module that has arrived since. What `:ZCmp reload` runs. Does nothing while
+disabled.
 
 ### `zcmp.version` → `string`
 
@@ -54,6 +76,11 @@ Register a provider. It serves nothing until a `sources.default` or
 ```lua
 require('zcmp').add_source_provider('spell', { name = 'Spell', flags = { 'kspell' } })
 ```
+
+Every `setup()`, `add_source_provider()` and `add_filetype_source()`
+re-resolves the options, and every provider module's `enable()` runs again
+with the re-resolved `opts` on the next pass — so a re-registered id reaches
+its module's `enable()` with the new `opts`, and so does every other module.
 
 See [docs/sources.md](sources.md) for the provider table in full.
 
@@ -70,12 +97,13 @@ the resolved options, and registrations go underneath, so an explicit `opts`
 still wins), and a call after it re-derives `'complete'` in every attached
 buffer.
 
-### `zcmp.get_lsp_capabilities(override?)` → `lsp.ClientCapabilities`
+### `zcmp.get_lsp_capabilities(override?, include_nvim_defaults?)` → `lsp.ClientCapabilities`
 
 Capabilities to hand a language server. ZCmp completes through core, so these
 are `vim.lsp.protocol.make_client_capabilities()` with `override` merged in —
 there is nothing of ZCmp's own to announce, and a config that does not call
-this loses nothing.
+this loses nothing. `include_nvim_defaults = false`, blink.cmp's own second
+argument, skips that base and returns `override` alone.
 
 ## Commands
 
@@ -86,11 +114,21 @@ until one answers `true`.
 `fallback` always answers, so it ends the list: anything written after it can
 never run, and zcmp says so with `vim.notify`. Write it last.
 
+An entry that names a snippet or signature command, or contains a function, is
+mapped in Select mode as well as Insert — the same rule as blink.cmp, so it
+reaches the placeholder a snippet leaves you on.
+
+The predicates in the tables below (`is_visible`/`is_menu_visible`,
+`is_snippet_active`, `is_documentation_visible`, `is_signature_visible`) are
+callable the same way, including on the `cmp` a function entry receives, but
+cannot be named in a keymap list — each answers a question rather than doing
+anything, and naming one declines the same way a typo does.
+
 ### The menu
 
 | Function | Does | Answers false when |
 | --- | --- | --- |
-| `show()` | Opens the menu | it is already open, or you are not in Insert mode |
+| `show()` | Opens the menu, with nothing selected unless a source marked an item — the same rule as a menu that opened by itself | it is already open, or you are not in Insert mode |
 | `show_on_keyword()` | `show()`, but only with a keyword before the cursor | there is none — so a `<Tab>` bound to it still indents |
 | `hide()` / `cancel()` | Closes it, restoring the text as typed | it is not open |
 | `select_next()` / `select_prev()` | Moves through it | it is not open |
@@ -98,7 +136,11 @@ never run, and zcmp says so with `vim.notify`. Write it last.
 | `select_and_accept(opts?)` | Accepts the selected item, or the first one | the menu is not open |
 | `is_visible()` / `is_menu_visible()` | — | — |
 
-`opts.callback` is called once the item has landed (on `CompleteDone`):
+`opts.callback` is called once the item has landed (on `CompleteDone`). If a
+command earlier in the same list already closed the menu — `{ 'hide',
+function(cmp) return cmp.accept({ callback = f }) end }`, where `hide()`'s
+`<C-e>` ends completion before `accept()`'s own `<C-y>` can — nothing landed,
+and `f` is never called:
 
 ```lua
 ['<CR>'] = {
@@ -112,6 +154,16 @@ never run, and zcmp says so with `vim.notify`. Write it last.
 `accept` and `select_and_accept` differ only when nothing is selected, which
 with `'autocomplete'` is the common case for sources that mark no preselect —
 see [the note in the README](../README.md#one-thing-worth-knowing-about-preselect).
+A menu `show()` opens obeys the same rule, so with nothing marked
+`<C-space><CR>` opens a line under every preset but `none`; with `auto_show =
+false` — which also switches the `lsp` provider's autotrigger off, so the menu
+opens on `<C-space>` only — bind `select_and_accept` to have `<CR>` take the
+first item. The menu `vim.lsp.completion` rebuilds once a server answers obeys
+the same rule, since ZCmp writes `noselect` itself; a `<CR>` with nothing
+selected in such a menu opens a line through `fallback`, which closes the menu
+first — Vim's own rule for `noinsert` would otherwise end completion without a
+newline. That is why `<CR>` is `{ 'fallback' }` in every preset but `none`,
+ZCmp's own addition to blink's presets; under `none`, add it yourself.
 
 ### Snippets
 
@@ -153,10 +205,14 @@ afterwards; `completion.documentation.auto_show` is the whole switch.
 
 | Function | Does | Answers false when |
 | --- | --- | --- |
-| `show_signature()` | `vim.lsp.buf.signature_help()` | `signature.enabled` is false, or no server offers it |
-| `hide_signature()` | Closes the floating preview | there is none |
+| `show_signature()` | `vim.lsp.buf.signature_help()` | `signature.enabled` is false, no attached server offers it, or its own signature-help window is already open |
+| `hide_signature()` | Closes its signature-help window | there is none open |
 | `is_signature_visible()` | — | — |
 
 ZCmp never asks by itself. There is no window that follows you through an
 argument list here — `show_signature` is the manual one, on the key you bind
-it to.
+it to. It declines while its own signature-help window — the one carrying
+core's `textDocument/signatureHelp` focus_id, not any LSP float such as a
+hover — is still open, so the shipped preset's `['<C-k>'] = { 'show_signature',
+'hide_signature', 'fallback' }` toggles the window instead of re-asking
+forever.

@@ -58,10 +58,13 @@ server's snippet items and any snippet plugin on `vim.snippet` are integrated
 with no adapter and nothing to configure. [Details below](#snippets).
 
 **Keys that give themselves back.** Every mapping is buffer-local and every
-`'fallback'` runs whatever the key was mapped to before ZCmp took it — an
-autopair plugin's `<CR>` keeps working because ZCmp finds it, not because
-ZCmp knows it exists. A list containing a snippet command is mapped in Select
-mode too, so `<Tab>` jumps out of a placeholder you are sitting on.
+`'fallback'` runs whatever the key is mapped to without ZCmp in the way — a
+buffer-local mapping is captured once, when ZCmp attached, but a global one
+is looked up fresh on every press. An autopair plugin's `<CR>` keeps working
+because ZCmp finds it, not because ZCmp knows it exists. A list naming a
+snippet or signature command, or containing a function, is mapped in Select
+mode too — blink.cmp's rule — so `<Tab>` jumps out of a placeholder you are
+sitting on.
 
 **A kind column you can read.** Most colourschemes leave `PmenuKind` linked to
 `Pmenu`, so it reads as part of the label. ZCmp colours it — and re-derives
@@ -77,8 +80,10 @@ looks like every other failure.
 **Nothing you cannot take back.** `:ZCmp disable` removes the mappings and
 restores what they displaced, gives every buffer the `'complete'` and
 `'autocomplete'` it had, restores the global options and the two highlight
-groups, and switches `vim.lsp.completion` back off for every client ZCmp
-switched it on for — trigger characters included.
+groups, and switches `vim.lsp.completion` off — trigger characters restored
+— for every client of a buffer it drove, whoever switched it on: ZCmp owns
+that wiring in its buffers (see [LSP](#lsp)), and nothing reports whether a
+client had it before.
 
 **What it does not do:** command-line completion (that is `'wildoptions'`,
 a different mechanism entirely), a signature window that follows you through
@@ -91,6 +96,8 @@ you want those, blink.cmp is a good plugin and this is the wrong one.
 - Optional: [zsnip.nvim](https://github.com/zuqini/zsnip.nvim), which the
   `snippets` provider points at by default. Nothing else needs it — see
   [Snippets](#snippets).
+- The `path` source recognises `/`-separated paths only — no Windows `C:\`
+  or `C:/` support.
 
 ## Installation
 
@@ -132,7 +139,7 @@ A source is an entry in `'complete'`. ZCmp ships four providers:
 
 | id | What it is | Needs |
 | --- | --- | --- |
-| `lsp` | The omnifunc, plus `vim.lsp.completion` autotrigger | a language server |
+| `lsp` | `vim.lsp.omnifunc()`, plus `vim.lsp.completion` autotrigger | a language server |
 | `path` | Filesystem paths, anchored at the token under the cursor | nothing |
 | `snippets` | A snippet source; `zsnip.complete` by default | that module, or another |
 | `buffer` | Core's own scanners: this buffer, other windows, other buffers | nothing |
@@ -149,7 +156,7 @@ require('zcmp').setup({
       lua = { inherit_defaults = true, 'mine' },  -- adds to it
     },
     providers = {
-      buffer = { max_items = 50, opts = {} },
+      buffer = { max_items = 50 },
       -- Anything 'complete' understands is a provider:
       spell = { flags = { 'kspell' } },
     },
@@ -172,11 +179,16 @@ block, before or after `setup()`, in either order. See
 The `lsp` source is two things at once, because each covers what the other
 misses:
 
-- the **`o` flag** in `'complete'` — the omnifunc — which merges server items
-  into the same ranked menu as everything else, but asks once per completion
+- **`vim.lsp.omnifunc()`**, called directly as a function source rather than
+  through `'omnifunc'` — a user's or another plugin's own function left in
+  that option can no longer stand in for it — which merges server items into
+  the same ranked menu as everything else, but asks once per completion
   cycle, so typing on through `vim.` narrows nothing;
 - **`vim.lsp.completion`'s autotrigger**, which re-asks per trigger character
-  but answers nothing for a plain keyword.
+  but answers nothing for a plain keyword. It opens the menu on its own,
+  undelayed: `completion.menu.auto_show = false` switches it off along with
+  `'autocomplete'` (the menu then opens on `<C-space>` only), and
+  `auto_show_delay_ms` does not apply to it.
 
 ZCmp widens the server's declared `triggerCharacters` to every letter, which
 is what makes the second one fire at all, and puts the declared list back when
@@ -190,10 +202,10 @@ selection it asks `completionItem/resolve` and fills the documentation popup
 with the answer. None of that happens in a buffer nobody enabled it on, and
 enabling it is not the default.
 
-The omnifunc joins `'complete'` only once a client answering
+`vim.lsp.omnifunc()` joins `'complete'` only once a client answering
 `textDocument/completion` is attached, and leaves when the last one detaches.
 That is the provider's `available`, and it is why `'complete'` in a buffer
-with no server has no dead `o` in it.
+with no server contributes nothing.
 
 ```lua
 sources = {
@@ -210,11 +222,25 @@ sources = {
 
 Turn `extend_trigger_characters` off for a server that misbehaves under a
 widened list; autotrigger then only fires on the characters it asked for.
+`autotrigger = false` switches the second path off for this provider alone,
+as `completion.menu.auto_show = false` does for the menu as a whole.
+Both keys are zcmp's own, and `setup()` checks them like any other option:
+an unknown key or a wrong type is reported.
 
-`get_lsp_capabilities(override?)` exists so a blink.cmp config moves over
-unedited. ZCmp completes through core, so it is
+Delete a `vim.lsp.completion.enable(...)` call your own `LspAttach` handler
+makes — the one in `:h lsp-attach`'s example. ZCmp owns `vim.lsp.completion`
+in every buffer it drives: it drops and re-enables every completion-capable
+client whenever one is newly wired, because Neovim reads `triggerCharacters`
+and installs autotrigger only on a buffer handle's first `enable()`. A
+synchronous handler that ran first used to win that race and silently defeat
+the widening; any `convert`/`cmp` opts on your own call are dropped either
+way.
+
+`get_lsp_capabilities(override?, include_nvim_defaults?)` exists so a
+blink.cmp config moves over unedited. ZCmp completes through core, so it is
 `vim.lsp.protocol.make_client_capabilities()` with `override` merged in — a
-config that never calls it loses nothing.
+config that never calls it loses nothing. `include_nvim_defaults = false`,
+blink's own second argument, skips that base and returns `override` alone.
 
 One default that is doing more than it looks:
 `completion.list.selection.auto_insert = false` writes `noinsert` into
@@ -278,27 +304,42 @@ default:
 snippets = {
   name = 'Snippets',
   module = 'zsnip.complete',
-  -- ZCmp owns 'complete', so zsnip is told not to append itself to it.
-  opts = { complete = false },
+  opts = {
+    -- ZCmp owns 'complete', so zsnip is told not to append itself to it.
+    complete = false,
+    -- Route an accepted zsnip item through `snippets.expand`, so a preset
+    -- -- LuaSnip, say -- or an override set later still applies.
+    expand = function(body)
+      require('zcmp.config').options.snippets.expand(body)
+    end,
+  },
 },
 ```
 
-That one key is the whole of the coordination. Everything else about
-snippets — how many are offered, whether they carry documentation — is
-configured in [zsnip's own `setup()`](https://github.com/zuqini/zsnip.nvim),
-where the rest of zsnip is.
+Both keys are coordination, not preference. `complete` because ZCmp is the
+single writer of `'complete'`, so zsnip must not append itself to it;
+`expand` so an accepted item goes through `snippets.expand` rather than
+zsnip's own default. Everything else about snippets — how many are offered,
+whether they carry documentation — is configured in [zsnip's own
+`setup()`](https://github.com/zuqini/zsnip.nvim), where the rest of zsnip
+is.
 
 It is a default, not a dependency. The provider is a `module` like any other,
 so any snippet plugin exposing `source()` or `completefunc()` takes its place
 under the same id, and dropping `snippets` from `sources.default` leaves the
-rest of the menu untouched. If the module is not installed the provider
-contributes nothing, every other source still resolves, and `:ZCmp status`
-names it.
+rest of the menu untouched. `opts` follow the module: naming the shipped
+default's module brings the shipped default's `opts` back with it
+(`module = 'zsnip.complete'` over the luasnip preset keeps the two
+coordination keys above), and any other module gets only the `opts` you give
+it. If the module is not installed the provider contributes nothing, every
+other source still resolves, and `:ZCmp status` names it.
 
 For the plugins people arrive with, ZCmp ships the module:
 
 - **LuaSnip** — `snippets.preset = 'luasnip'` already pointed the provider at
-  `zcmp.sources.snippets.luasnip`; there is nothing more to write.
+  `zcmp.sources.snippets.luasnip`; there is nothing more to write. `opts`:
+  `limit` (default 100), `documentation` (default true), `show_condition`
+  (default true).
 - **[nvim-snippets](https://github.com/garymjr/nvim-snippets)** — one
   provider line:
 
@@ -309,6 +350,11 @@ For the plugins people arrive with, ZCmp ships the module:
     },
   })
   ```
+
+  `opts`: `limit` (default 100), `documentation` (default true).
+
+Both adapters' `limit` is checked the same way: one that is not a whole
+number `>= 1` is reported once and the default used.
 
 zsnip is the one ZCmp ships *pointed at* because it already speaks
 `'complete'` — being a function source, it picks its own start column, so a
@@ -329,28 +375,49 @@ require('zcmp').setup({
     preset = 'enter',
     ['<Tab>'] = { 'select_next', 'snippet_forward', 'show_on_keyword', 'fallback' },
     ['<S-Tab>'] = { 'select_prev', 'snippet_backward', 'fallback' },
-    ['<C-e>'] = { 'hide', 'fallback' },
     ['<CR>'] = { 'select_and_accept', 'fallback' },
     ['<BS>'] = { 'snippet_delete', 'fallback' },
-    ['<C-j>'] = {},  -- map nothing to this key
+    ['<C-j>'] = {},     -- map nothing to this key
+    ['<C-e>'] = false,  -- same as {}
   },
 })
 ```
 
 Every preset but `none` also brings `<C-space>`, `<Up>`/`<Down>`,
-`<C-n>`/`<C-p>`, `<S-Tab>` to jump a tabstop back, `<C-b>`/`<C-f>` for the
-documentation popup, `<C-k>` for signature help and `<C-y>` to accept.
+`<C-n>`/`<C-p>`, `<C-e>` to close the menu, `<S-Tab>` to jump a tabstop back,
+`<C-b>`/`<C-f>` for the documentation popup, `<C-k>` for signature help and
+`<C-y>` to accept — and `<CR>` as `{ 'fallback' }`, ZCmp's own addition to
+blink's presets: Enter does exactly what it did before, but through ZCmp's
+feeder, which closes a menu that has nothing selected ahead of the key —
+without it, the menu `vim.lsp.completion` rebuilds once a server answers
+swallows the first Enter. Under `none`, add `['<CR>'] = { 'fallback' }` if
+you see that.
 
 Each entry is tried in order until one reports that it did something.
-`'fallback'` is the escape hatch: it runs whatever the key was mapped to
-before ZCmp attached — a buffer-local mapping, a plugin's global one, or the
-built-in behaviour of the key. That is how `<Tab>` still indents, `<CR>` still
-opens a line, and an autopair plugin still pairs. It always answers, so write
-it last: a command after it can never run, and zcmp says so.
+`'fallback'` is the escape hatch: it runs whatever the key is mapped to
+without ZCmp in the way — a buffer-local mapping is captured once, when ZCmp
+attached, but a global one (a plugin's) is looked up fresh on every press, so
+one defined after ZCmp attached still runs; failing either, the built-in
+behaviour of the key runs instead. That is how `<Tab>` still indents, `<CR>`
+still opens a line, and an autopair plugin still pairs. It always answers, so
+write it last: a command after it can never run, and zcmp says so.
+
+An entry that names a snippet or signature command, or contains a function,
+is mapped in Select mode as well as Insert — the same rule as blink.cmp, so a
+`<Tab>` reaches the placeholder a snippet leaves you on. There `fallback`
+follows Vim's own rule for the key: an `smap`'s rhs runs in Select mode; any
+other mapping the key resolves to — a `vmap`, a `:map` — runs from Visual on
+the same selection instead, with Select mode restored once it has run; and
+with no mapping at all, the key types as text, which in Select mode replaces
+the selection.
 
 An entry may also be a function, which is handed the commands table
 (`require('zcmp.api')` — the list in [docs/api.md](docs/api.md), not the
-module's `setup`/`enable`/`reload`):
+module's `setup`/`enable`/`reload`) and answers `true`/`false`/`nil` like a
+named command — or a string, keys in `<Key>` notation fed as if typed
+(remapped, same as blink's own function entries, unless it contains the key
+itself, which is fed non-recursively); an empty string passes the key to the
+next command, the same as `false`:
 
 ```lua
 ['<C-l>'] = {
@@ -370,17 +437,22 @@ Two commands are ZCmp's own, and have no blink.cmp equivalent:
 so a `<Tab>` bound to it still indents) and `snippet_delete` (delete the
 selected placeholder and keep typing in its place).
 
-A name that is not a command, and a command written after `'fallback'`, are
-both reported with `vim.notify` — a key that quietly does nothing reads as the
-plugin being broken.
+A `keymap.preset` that is not one of the four, a command written after
+`'fallback'`, and one key spelled twice are all reported by `setup()` — a
+keymap that is wrong in one of these ways reads as the plugin being broken,
+not as the key silently doing nothing, and an unknown preset falls back to
+`default`. A name that is not a command — or is one of the predicates, such
+as `is_visible` — is reported by `setup()` the same way, and skipped when the
+key is pressed.
 
 ## Appearance
 
 Core draws the menu, and most colourschemes leave `PmenuKind` linked to
 `Pmenu`, so the kind column reads as part of the label. ZCmp sets `PmenuKind`
-and `PmenuKindSel` from `appearance.kind_hl` (`Special` by default), keeping
-the menu's own background and the selected row's, and re-derives both after a
-`:colorscheme` — including the one your config sets after `setup()` has run.
+and `PmenuKindSel` from `appearance.kind_hl` (ZCmp's own; `Special` by
+default), keeping the menu's own background and the selected row's, and
+re-derives both after a `:colorscheme` — including the one your config sets
+after `setup()` has run.
 `appearance.kind_hl = false` leaves the groups alone; `disable()` puts back
 what was there.
 
@@ -390,7 +462,9 @@ what was there.
 
 ```lua
 require('zcmp').setup({
-  -- Which buffers zcmp drives.
+  -- Which buffers zcmp drives. Runs with that buffer current, so a
+  -- no-argument function reading vim.bo/vim.b (blink.cmp's own form) works
+  -- unedited.
   enabled = function(bufnr) return vim.bo[bufnr].buftype == '' end,
 
   keymap = { preset = 'default' },
@@ -403,7 +477,12 @@ require('zcmp').setup({
   },
 
   completion = {
-    menu = { auto_show = true },          -- 'autocomplete': open as you type
+    menu = {
+      auto_show = true,                   -- 'autocomplete', and the lsp provider's
+                                          -- autotrigger: open as you type
+      auto_show_delay_ms = 200,           -- 'autocompletedelay'; the autotrigger
+                                          -- does not wait for it
+    },
     documentation = { auto_show = true }, -- `popup` in 'completeopt'
     list = {
       max_items = nil,                    -- default cap for providers with none
@@ -412,10 +491,9 @@ require('zcmp').setup({
         auto_insert = false,              -- when on, inserts before accepting
       },
     },
-    trigger = { delay_ms = 200 },         -- 'autocompletedelay'
   },
 
-  fuzzy = { enabled = true },             -- `fuzzy` in 'completeopt'
+  fuzzy = { enabled = true },             -- `fuzzy` in 'completeopt' (ZCmp's own; blink has no switch for its matcher)
 
   snippets = {
     preset = 'default',                   -- or 'luasnip', which rewrites the
@@ -433,7 +511,16 @@ require('zcmp').setup({
 An unknown key, or a known one of the wrong type, is reported with
 `vim.notify` and otherwise ignored — the rest of the config still applies. A
 `max_item` that should have been `max_items` is a silent no-op that reads
-exactly like the option not working, so it is named instead.
+exactly like the option not working, so it is named instead. A value of the
+wrong type keeps its default rather than landing in the resolved config —
+a table-shaped option handed a scalar and a scalar leaf handed the wrong type
+are pruned on the same terms — and every list-shaped option (`sources.default`,
+a `per_filetype` list, a provider's `flags`, a keymap entry's command list) is
+checked element by element and compacted afterwards, so a wrong-typed element
+is reported and dropped like any other wrong-typed value, and the rest keep
+their order; a `nil` in the list (the `cond and 'x' or nil` idiom) is simply
+absent, rather than a hole the defaults get merged into. `setup()` handed
+anything but a table warns and falls back to the defaults.
 
 `setup()` also writes `shortmess+=c`: with the menu opening on nearly every
 keystroke, `match 1 of 9` in the message line is noise.
@@ -450,9 +537,24 @@ If you want `<CR>` to take the first match whatever produced it, bind
 `select_and_accept` rather than `accept` — the difference between the two is
 exactly this case.
 
+A menu `show()` opens — `<C-space>` in every preset — obeys the same rule,
+however it opened: with nothing marked, `<CR>` opens a line and
+`select_and_accept` takes the first item. With `auto_show = false`, having
+`<C-space><CR>` take the first item means binding `select_and_accept` to
+`<CR>`.
+
 On Neovim 0.12.0 there is no `preselect` flag at all, so *nothing* is ever
 selected while the menu opens by itself, and `select_and_accept` is the only
 binding that accepts anything. `:checkhealth zcmp` says so.
+
+A menu `vim.lsp.completion` rebuilds once a server answers obeys the same
+rule, now that ZCmp writes `noselect` itself: that restart goes through
+`vim.fn.complete()`, which does not force the flag the way `'autocomplete'`
+does. In such a menu a `<CR>` with nothing selected opens a line through
+`fallback`, which closes the menu first — Vim's own rule for `noinsert` would
+otherwise end completion without a newline. That is why every preset but
+`none` maps `<CR>` to `fallback`; under `none`, that Vim rule applies as
+written until you add `['<CR>'] = { 'fallback' }`.
 
 ## Commands and diagnostics
 

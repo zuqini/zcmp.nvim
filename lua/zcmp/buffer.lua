@@ -35,7 +35,7 @@ local function known(flag)
   if not understood then
     understood = {}
     local saved = vim.go.completeopt
-    for _, name in ipairs({ 'fuzzy', 'popup', 'noinsert', 'preselect' }) do
+    for _, name in ipairs({ 'fuzzy', 'popup', 'noinsert', 'noselect', 'preselect' }) do
       understood[name] = pcall(function()
         vim.go.completeopt = 'menuone,' .. name
       end)
@@ -71,8 +71,15 @@ function M.completeopt()
   if not selection.auto_insert and known('noinsert') then
     opts[#opts + 1] = 'noinsert'
   end
-  -- 'autocomplete' forces 'noselect' on, and 'preselect' is what overrides it
-  -- -- the only thing putting an item under the cursor for <cr>.
+  -- 'autocomplete' forces 'noselect' on for the menus it opens, but
+  -- vim.lsp.completion's restart -- the menu vim.fn.complete() rebuilds once
+  -- a server answers -- does not, and selects its first item unless the flag
+  -- is written. Written here so both obey the same rule: 'preselect' is what
+  -- overrides it, for an item a source marked -- the only thing putting an
+  -- item under the cursor for <cr>.
+  if known('noselect') then
+    opts[#opts + 1] = 'noselect'
+  end
   if selection.preselect ~= false and known('preselect') then
     opts[#opts + 1] = 'preselect'
   end
@@ -81,14 +88,19 @@ end
 
 ---'autocompletedelay' takes a non-negative whole number and raises on a float,
 ---which would abandon apply_globals() with 'autocomplete' already off: core's
----own completion switched off and ZCmp not yet attached to anything.
+---own completion switched off and ZCmp not yet attached to anything. The
+---type is config's to check; what is left here is the range, which no shape
+---can say.
 ---@return integer? ms nil when the value is no kind of number to round
 local function delay()
-  local ms = config.options.completion.trigger.delay_ms
-  local wanted = type(ms) == 'number' and ms > -math.huge and ms < math.huge and math.max(0, math.floor(ms)) or nil
+  local ms = config.options.completion.menu.auto_show_delay_ms
+  -- Clamped at what the option takes: above 2^31 it raises the same E474 a
+  -- float does, and math.floor of a large float is still a float. ms == ms
+  -- excludes NaN, the one value with nothing to round.
+  local wanted = ms == ms and math.min(math.max(0, math.floor(ms)), 2147483647) or nil
   if wanted ~= ms then
     vim.notify_once(
-      ('zcmp: completion.trigger.delay_ms is milliseconds as a whole number, not %s'):format(vim.inspect(ms)),
+      ('zcmp: completion.menu.auto_show_delay_ms is milliseconds as a whole number, not %s'):format(vim.inspect(ms)),
       vim.log.levels.WARN
     )
   end
@@ -106,8 +118,11 @@ function M.apply_globals()
 
   -- Buffer-local opt-in, so a prompt or terminal buffer keeps core's own menu.
   vim.go.autocomplete = false
-  -- Sources only run once the delay elapses, so this also bounds how often a
-  -- directory is listed and a server asked. It suppresses nothing while typing
+  -- The 'complete' sources only run once the delay elapses, so this also
+  -- bounds how often a directory is listed. It does not reach
+  -- vim.lsp.completion's autotrigger, which is not a 'complete' source: that
+  -- asks the server on every trigger character, undelayed, and is switched
+  -- off with `auto_show` (see lsp.attach). It suppresses nothing while typing
   -- faster than the value.
   vim.go.autocompletedelay = delay() or globals.autocompletedelay
   vim.go.completeopt = M.completeopt()
@@ -150,10 +165,18 @@ end
 
 ---@param bufnr integer
 local function wire(bufnr)
-  if not api.nvim_buf_is_valid(bufnr) then
+  -- Unloaded counts as gone, the rule attach_all() already applies: :bdelete
+  -- fires LspDetach before BufDelete, so the pass it scheduled lands after
+  -- the detach, on a buffer that is valid, unlisted, and not coming back.
+  if not api.nvim_buf_is_valid(bufnr) or not api.nvim_buf_is_loaded(bufnr) then
+    M.detach(bufnr)
     return
   end
-  local ok, enabled = pcall(config.options.enabled, bufnr)
+  -- The same nvim_buf_call wrap as sources' in_buffer, for the same reason:
+  -- a no-argument predicate reading vim.bo/vim.b must see bufnr as current.
+  local ok, enabled = pcall(vim.api.nvim_buf_call, bufnr, function()
+    return config.options.enabled(bufnr)
+  end)
   if not ok then
     vim.notify_once(('zcmp: the `enabled` option raised: %s'):format(enabled), vim.log.levels.ERROR)
   end
@@ -164,7 +187,12 @@ local function wire(bufnr)
 
   if not attached[bufnr] then
     attached[bufnr] = { complete = vim.bo[bufnr].complete, autocomplete = vim.bo[bufnr].autocomplete }
-    keymap.apply(bufnr)
+    local applied, err = pcall(keymap.apply, bufnr)
+    if not applied then
+      vim.notify_once(('zcmp: keymap.apply raised: %s'):format(err), vim.log.levels.ERROR)
+      M.detach(bufnr)
+      return
+    end
   end
   vim.bo[bufnr].autocomplete = config.options.completion.menu.auto_show ~= false
   if not set_complete(bufnr) then
@@ -188,6 +216,24 @@ function M.attach(bufnr)
       wire(bufnr)
     end
   end)
+end
+
+---Forgets an LSP client synchronously, then ends in |M.attach()| -- the
+---reason this cannot simply be M.attach(): forgetting has to happen now, not
+---on the scheduled pass M.attach() runs. A buffer re-read (`:e`, `:e!`) fires
+---`on_detach` and reattaches the same client id synchronously, before that
+---pass lands, so `lsp.sync()` would otherwise still find the client marked
+---wired and do nothing. `client_id` is nil for an LspDetach with no `data` --
+---`:doautocmd LspDetach` or `nvim_exec_autocmds('LspDetach', ...)` fire it
+---that way -- in which case there is nothing to forget and this is exactly
+---|M.attach()|.
+---@param bufnr integer
+---@param client_id? integer
+function M.forget_client(bufnr, client_id)
+  if client_id then
+    lsp.forget(bufnr, client_id)
+  end
+  M.attach(bufnr)
 end
 
 ---Buffers opened before |zcmp.setup()| ran never see BufEnter.

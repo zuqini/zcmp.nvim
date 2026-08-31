@@ -2,15 +2,16 @@ local helpers = require('helpers')
 
 ---A recording stand-in for vim.health: every call, in order, with the section
 ---it was made under.
----@return { sections: string[], entries: { kind: string, message: string, section: string }[] }
+---@return { sections: string[], entries: { kind: string, message: string, section: string, advice: string[]? }[] }
 local function recorder()
   local report = { sections = {}, entries = {} }
   local function record(kind)
-    return function(message)
+    return function(message, advice)
       report.entries[#report.entries + 1] = {
         kind = kind,
         message = tostring(message),
         section = report.sections[#report.sections],
+        advice = advice,
       }
     end
   end
@@ -123,7 +124,26 @@ describe(':checkhealth zcmp', function()
     local report = recorder()
     require('zcmp.health').check()
 
-    assert.are.equal('warn', entry(report, 'not enabled').kind)
+    local warned = entry(report, 'not enabled')
+    assert.are.equal('warn', warned.kind)
+    -- ':ZCmp' does not exist before setup() has ever run, so the remedy is
+    -- setup() itself, not the command the Buffer section's hint points at
+    -- once it exists.
+    assert.matches("require%('zcmp'%)%.setup%(%)", warned.advice[1])
+  end)
+
+  -- After setup() the command exists; the remedy for "not enabled" is now the
+  -- same one the Buffer section's hint gives for the identical state.
+  it("gives the ':ZCmp enable' remedy once setup() has run and been undone", function()
+    require('zcmp').setup({})
+    require('zcmp').disable()
+
+    local report = recorder()
+    require('zcmp.health').check()
+
+    local warned = entry(report, 'not enabled')
+    assert.are.equal('warn', warned.kind)
+    assert.matches(':ZCmp enable', warned.advice[1])
   end)
 
   it('reports an attached buffer and what is serving it', function()
@@ -138,6 +158,27 @@ describe(':checkhealth zcmp', function()
     assert.are.equal('ok', entry(report, '.^100,w^100,b^100').kind)
   end)
 
+  -- 'completeopt' is global-local: check_setup() reads vim.o, which says
+  -- nothing about a local value sitting only in this buffer.
+  it("warns about a 'completeopt' set locally in the buffer, even though the global value matches", function()
+    require('zcmp').setup({})
+    local editing = helpers.buffer()
+    helpers.settle(editing)
+    vim.bo[editing].completeopt = 'menu'
+    vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(false, true))
+
+    local report = recorder()
+    require('zcmp.health').check()
+
+    assert.are.equal(('Buffer %d'):format(editing), report.sections[4])
+    local found = entry(report, "'completeopt' is set locally")
+    assert.are.equal('warn', found.kind)
+    -- zcmp never writes the local slot, so blaming "after zcmp did" here
+    -- would describe nothing; the remedy is the actionable line instead.
+    assert.is_nil(table.concat(found.advice, '\n'):find('after zcmp did', 1, true))
+    assert.is_true(table.concat(found.advice, '\n'):find(':setlocal completeopt<', 1, true) ~= nil)
+  end)
+
   -- "My snippets do not show up" is usually this: the provider is listed and
   -- the module it needs is not installed.
   it('names a provider whose module is missing', function()
@@ -150,6 +191,37 @@ describe(':checkhealth zcmp', function()
     local missing = entry(report, 'zsnip.complete')
     assert.are.equal('warn', missing.kind)
     assert.are.equal('Sources', missing.section)
+  end)
+
+  it('errors when sources.default is empty', function()
+    require('zcmp').setup({ sources = { default = {} } })
+    local bufnr = helpers.buffer()
+    helpers.settle(bufnr)
+
+    local report = recorder()
+    require('zcmp.health').check(bufnr)
+
+    local found = entry(report, 'no sources')
+    assert.are.equal('error', found.kind)
+    assert.matches('sources%.default', found.message)
+  end)
+
+  -- An explicit, non-inheriting per_filetype list is what the user asked for,
+  -- so an empty one is news, not a fault -- and it is not sources.default's.
+  it('names sources.per_filetype.<ft> and only informs when that is the empty one', function()
+    require('zcmp').setup({
+      sources = { default = { 'buffer' }, per_filetype = { markdown = {} } },
+    })
+    local bufnr = helpers.buffer()
+    vim.bo[bufnr].filetype = 'markdown'
+    helpers.settle(bufnr)
+
+    local report = recorder()
+    require('zcmp.health').check(bufnr)
+
+    local found = entry(report, 'no sources')
+    assert.are.equal('info', found.kind)
+    assert.matches('sources%.per_filetype%.markdown', found.message)
   end)
 
   it('is quiet about a source with nothing to offer this buffer', function()
@@ -186,6 +258,74 @@ describe(':checkhealth zcmp', function()
     assert.are.equal('ok', entry(report, "'complete' = ").kind)
   end)
 
+  -- A user whose `enabled` admits other buftypes still gets the alternate
+  -- buffer reported on, not the checkhealth scratch buffer: which buffer zcmp
+  -- drives is `buffer.attached()`'s question to answer, not buftype's.
+  it('reports on the alternate buffer even when its buftype is not empty', function()
+    require('zcmp').setup({ enabled = function() return true end, sources = { default = { 'buffer' } } })
+    local editing = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_set_current_buf(editing)
+    helpers.settle(editing)
+    helpers.buffer()
+
+    local report = recorder()
+    require('zcmp.health').check()
+
+    assert.are.equal(('Buffer %d'):format(editing), report.sections[4])
+  end)
+
+  -- A buffer zcmp is not attached to -- disabled, or excluded by `enabled` --
+  -- is still the one to report on: `check_buffer()` already explains why it
+  -- is not attached, which is the case this check exists for.
+  it('reports on the alternate buffer when zcmp is not attached to it', function()
+    require('zcmp').setup({ enabled = function() return false end, sources = { default = { 'buffer' } } })
+    local editing = helpers.buffer()
+    vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(false, true))
+
+    local report = recorder()
+    require('zcmp.health').check()
+
+    assert.are.equal(('Buffer %d'):format(editing), report.sections[4])
+    local warned = entry(report, 'not attached here')
+    assert.are.equal('warn', warned.kind)
+    -- `check_buffer()` cannot tell `enabled` apart from every other reason
+    -- `wire()` detaches (`keymap.apply` raising, `'complete'` refused), so
+    -- the hint names both rather than overclaiming the one it can show.
+    assert.matches('enabled.*answered false', warned.advice[1])
+    assert.matches('earlier pass reported an error', warned.advice[1])
+  end)
+
+  -- `enabled` excluding this buftype is not the reason once zcmp itself is
+  -- off -- pointing at `enabled` here would send a user auditing the wrong
+  -- option.
+  it('explains that zcmp is disabled rather than blaming buftype', function()
+    require('zcmp').setup({ sources = { default = { 'buffer' } } })
+    require('zcmp').disable()
+    local editing = helpers.buffer()
+
+    local report = recorder()
+    require('zcmp.health').check(editing)
+
+    local warned = entry(report, 'not attached here')
+    assert.are.equal('warn', warned.kind)
+    assert.matches('zcmp is disabled', warned.advice[1])
+    assert.matches(':ZCmp enable', warned.advice[1])
+  end)
+
+  -- Before setup() has ever run, ':ZCmp' does not exist -- the hint here must
+  -- agree with the Setup section's, not point at a command there is none of.
+  it('points at setup() rather than :ZCmp enable when setup() never ran', function()
+    local editing = helpers.buffer()
+
+    local report = recorder()
+    require('zcmp.health').check(editing)
+
+    local warned = entry(report, 'not attached here')
+    assert.are.equal('warn', warned.kind)
+    assert.matches('zcmp is disabled', warned.advice[1])
+    assert.matches("require%('zcmp'%)%.setup%(%)", warned.advice[1])
+  end)
+
   -- Two engines writing 'complete' and mapping <Tab> is the failure that looks
   -- like every other failure.
   it('warns about another completion engine in the same session', function()
@@ -211,6 +351,20 @@ describe(':checkhealth zcmp', function()
     local report = recorder()
     require('zcmp.health').check()
 
-    assert.are.equal('warn', entry(report, "'completeopt' is").kind)
+    local found = entry(report, "'completeopt' is")
+    assert.are.equal('warn', found.kind)
+    assert.is_true(table.concat(found.advice, '\n'):find('after zcmp did', 1, true) ~= nil)
+  end)
+
+  -- The 'not enabled' warning above already covers this; comparing
+  -- 'completeopt' against a config zcmp never applied would blame it for a
+  -- value it had no part in.
+  it("stays quiet about 'completeopt' while not enabled", function()
+    vim.go.completeopt = 'menu'
+
+    local report = recorder()
+    require('zcmp.health').check()
+
+    assert.is_nil(entry(report, "'completeopt' is"))
   end)
 end)

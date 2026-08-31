@@ -68,11 +68,15 @@ which is most of the suite's wall-clock time; `--filter` past
 | `path_test.lua` | The path source: where a token starts, what it lists, and the shapes that are not paths at all |
 | `sources_test.lua` | `sources.default` to a 'complete' value: order, caps, per-filetype lists, provider modules that are missing or serve nothing |
 | `keymap_test.lua` | Presets, command dispatch order, and `'fallback'` — reaching a displaced mapping and putting it back |
+| `fallback_test.lua` | `restore()` on its own: a displaced mapping goes back under the mode it was captured from — `' '`, a multi-letter mask, a `vmap` found through Select |
 | `api_test.lua` | Every keymap command, against a stubbed menu, snippet session and documentation popup |
+| `appearance_test.lua` | The kind column highlight: derivation from `kind_hl`, re-deriving after a `:colorscheme`, and what `disable()` puts back |
 | `buffer_test.lua` | 'completeopt' derivation, the global options, and which buffers attach, detach and re-derive |
 | `lsp_test.lua` | Trigger-character widening, capabilities, and a real in-process client arriving and leaving |
+| `snippets_source_test.lua` | The shared snippet-source machinery (start column, fuzzy matching, expand-on-accept), and the LuaSnip and nvim-snippets adapters built on it |
 | `health_test.lua` | Every `:checkhealth zcmp` section, against a recording `vim.health` stub |
 | `commands_test.lua` | `:ZCmp` dispatch, completion, status output, enable/disable/reload |
+| `init_test.lua` | The autocmds, a second `setup()`, registering a source, `disable()`, `reload()`, the version floor and the command surface |
 | `integration_test.lua` | Real keystrokes in a child Neovim: what the menu offers, what accepting puts in the buffer, and which key does what |
 | `docs_test.lua` | The default-config block in README.md and doc/zcmp.txt, run as Lua and compared against `config.lua`'s own defaults |
 

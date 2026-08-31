@@ -5,6 +5,10 @@
 
 local core = require('zcmp.sources.snippets')
 
+-- The chunk's own module name, handed to it as `...` by `require` (Lua 5.1
+-- manual §8.1) -- matches the string below without one going stale on rename.
+local OWNER = ... or 'zcmp.sources.snippets.nvim_snippets'
+
 local M = {}
 
 ---@class zcmp.NvimSnippetsOpts
@@ -34,9 +38,8 @@ local function joined(value, separator)
 end
 
 ---@param findstart 0|1
----@param base string
 ---@return integer|table
-function M.completefunc(findstart, base)
+function M.completefunc(findstart)
   if findstart == 1 then
     return core.findstart()
   end
@@ -48,8 +51,12 @@ function M.completefunc(findstart, base)
     return { words = {} }
   end
 
+  local names = vim.tbl_keys(loaded)
+  table.sort(names)
+
   local candidates = {}
-  for _, snippet in pairs(loaded) do
+  for _, name in ipairs(names) do
+    local snippet = loaded[name]
     local body = joined(snippet.body, '\n')
     -- VSCode-format snippets may declare several prefixes; each is its own
     -- trigger for the same body.
@@ -64,7 +71,7 @@ function M.completefunc(findstart, base)
       end
     end
   end
-  return core.complete(base, candidates, options)
+  return core.complete(OWNER, candidates, options)
 end
 
 return M

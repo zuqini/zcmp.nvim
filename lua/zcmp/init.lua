@@ -19,6 +19,11 @@ local api = require('zcmp.api')
 local appearance = require('zcmp.appearance')
 local buffer = require('zcmp.buffer')
 local config = require('zcmp.config')
+-- init's one direct edge into lsp.lua: everything else per-buffer goes
+-- through buffer.lua, the lifecycle façade. `buffer.lua` already requires
+-- this at its own top, so nothing is deferred by requiring it lazily here.
+local lsp = require('zcmp.lsp')
+local sources = require('zcmp.sources')
 
 local M = {}
 
@@ -41,7 +46,11 @@ local function autocmds()
   vim.api.nvim_create_autocmd({ 'BufEnter', 'FileType', 'LspAttach', 'LspDetach' }, {
     group = group,
     callback = function(args)
-      buffer.attach(args.buf)
+      if args.event == 'LspDetach' then
+        buffer.forget_client(args.buf, args.data and args.data.client_id)
+      else
+        buffer.attach(args.buf)
+      end
     end,
   })
 
@@ -53,10 +62,30 @@ local function autocmds()
     end,
   })
 
+  -- Here rather than in the sources that need it: the relocation being undone
+  -- is |vim.lsp.completion|'s restart, which ZCmp switches on, so putting the
+  -- run back is ZCmp's to do -- for every reason the menu closed, since a
+  -- selected item's word is in the buffer whether it was accepted or discarded
+  -- by typing on, and a relocated one is wrong either way.
+  vim.api.nvim_create_autocmd('CompleteDone', {
+    group = group,
+    callback = function()
+      sources.trim_head()
+    end,
+  })
+
+  -- Restored before the scheme runs and applied after: a scheme that leaves
+  -- these two groups alone would otherwise have ZCmp's own colours captured
+  -- as the ones to give back.
+  vim.api.nvim_create_autocmd('ColorSchemePre', {
+    group = group,
+    callback = function()
+      appearance.restore()
+    end,
+  })
   vim.api.nvim_create_autocmd('ColorScheme', {
     group = group,
     callback = function()
-      appearance.forget()
       appearance.apply()
     end,
   })
@@ -67,6 +96,8 @@ end
 ---@param opts? zcmp.Config
 function M.setup(opts)
   config.setup(opts)
+  -- Lazy on purpose: commands.lua requires 'zcmp' at its own top level, so
+  -- this must stay inside setup() rather than move to init.lua's own top.
   require('zcmp.commands').create()
   M.enable()
 end
@@ -77,6 +108,13 @@ end
 ---well as the options -- a buffer already attached is one `wire()` leaves the
 ---keymaps of alone.
 ---
+---Forgets which provider modules have started, so that one `disable()` left
+---missing -- not on the runtimepath, or otherwise unable to start -- gets a
+---fresh attempt rather than the memo from its previous life. Every other
+---piece of state `disable()` gives back is likewise rebuilt from scratch here;
+---this is the one `disable()` itself cannot touch, since forgetting it while
+---disabled would leave nothing to act on the memory.
+---
 ---Does nothing at all below the 0.12.0 floor: the first thing it reads is an
 ---option that Neovim does not have, and an unknown-option traceback out of a
 ---buffer module names nothing a user can act on. Said here rather than in
@@ -86,7 +124,12 @@ function M.enable()
     vim.notify('zcmp: Neovim 0.12.0+ is required', vim.log.levels.ERROR)
     return
   end
+  sources.reset()
   buffer.detach_all()
+  -- Restored before it is re-applied, so a second setup() that turns the
+  -- highlight off leaves the group as apply() found it rather than as the
+  -- first setup() left it.
+  appearance.restore()
   appearance.apply()
   buffer.apply_globals()
   autocmds()
@@ -95,8 +138,10 @@ function M.enable()
 end
 
 ---Hand completion back: mappings are removed, the options ZCmp set are
----restored, buffers keep whatever 'complete' they had before, and every
----client ZCmp switched |vim.lsp.completion| on for is switched back.
+---restored, buffers keep whatever 'complete' they had before, and
+---|vim.lsp.completion| is switched off for every client of a buffer ZCmp
+---drove -- including one a user's own `LspAttach` handler had already
+---switched it on for.
 function M.disable()
   pcall(vim.api.nvim_del_augroup_by_name, GROUP)
   buffer.detach_all()
@@ -105,23 +150,24 @@ function M.disable()
   enabled = false
 end
 
+---Whether |zcmp.enable()| has run and |zcmp.disable()| has not -- the engine
+---switch, for every buffer alike. Not blink.cmp's `is_enabled()`, which
+---evaluates the `enabled` predicate for the current buffer; `:ZCmp status`
+---reports that (as "attached"/"not attached") for the current one.
 ---@return boolean
 function M.is_enabled()
   return enabled
 end
 
 ---Re-read the source list in every buffer ZCmp drives, and start any provider
----module that has arrived since. What `:ZCmp reload` runs. While disabled it
----only forgets which modules have started, so that enabling again starts them.
+---module that has arrived since. What `:ZCmp reload` runs. Does nothing while
+---disabled: |zcmp.enable()| forgets which modules have started on its own, so
+---there is no state left here to reload into.
 function M.reload()
-  require('zcmp.sources').reset()
-  -- Deliberately before the guard: forgetting is all reloading can mean while
-  -- disabled. Attaching here would map keys and write 'complete' with every
-  -- autocmd gone and nothing left to maintain them -- a state |zcmp.is_enabled()|
-  -- would go on denying.
   if not enabled then
     return
   end
+  sources.reset()
   buffer.detach_all()
   buffer.attach_all()
 end
@@ -139,7 +185,7 @@ end
 ---@param id string
 ---@param provider zcmp.Provider
 function M.add_source_provider(id, provider)
-  config.add_provider(id, provider)
+  config.add_source_provider(id, provider)
   refresh()
 end
 
@@ -154,9 +200,10 @@ end
 
 ---Capabilities to hand a language server.
 ---@param override? lsp.ClientCapabilities
+---@param include_nvim_defaults? boolean Default true
 ---@return lsp.ClientCapabilities
-function M.get_lsp_capabilities(override)
-  return require('zcmp.lsp').capabilities(override)
+function M.get_lsp_capabilities(override, include_nvim_defaults)
+  return lsp.capabilities(override, include_nvim_defaults)
 end
 
 -- The keymap commands, as a public API: what a `keymap` entry names by string,

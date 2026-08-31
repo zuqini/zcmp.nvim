@@ -3,30 +3,34 @@
 ---Loaded for its annotations only; the module itself is empty.
 
 ---@class zcmp.Config
----@field enabled? fun(bufnr: integer): boolean Whether ZCmp drives completion in a buffer (default: `buftype` is empty)
+---@field enabled? fun(bufnr?: integer): boolean Whether ZCmp drives completion in a buffer (default: `buftype` is empty); runs with that buffer current, so blink.cmp's no-argument form (reading `vim.bo`/`vim.b` un-indexed) works unedited
 ---@field keymap? zcmp.KeymapConfig
 ---@field sources? zcmp.SourcesConfig
 ---@field completion? zcmp.CompletionConfig
----@field fuzzy? { enabled?: boolean } Fuzzy matching, i.e. `fuzzy` in 'completeopt' (default true)
+---@field fuzzy? { enabled?: boolean } Fuzzy matching, i.e. `fuzzy` in 'completeopt' (default true). ZCmp's own: blink.cmp has no switch for its matcher
 ---@field snippets? zcmp.SnippetsConfig
 ---@field signature? { enabled?: boolean } Whether |zcmp.show_signature()| does anything (default false)
 ---@field appearance? { kind_hl?: string|false } Highlight group the kind column borrows its colour from (default `'Special'`)
 
 ---Keys mapped in every buffer ZCmp attaches to, on top of a preset. Each
 ---value is a list of commands tried in order until one reports that it did
----something; `'fallback'` hands the key to whatever was mapped before, and
----always answers, so nothing written after it in a list can run.
+---something; `'fallback'` hands the key to whatever it is mapped to without
+---ZCmp in the way -- a buffer-local mapping captured once, when ZCmp
+---attached, a global one looked up fresh on every press -- and always
+---answers, so nothing written after it in a list can run.
 ---@class zcmp.KeymapConfig
 ---@field preset? zcmp.KeymapPreset
----@field [string] zcmp.Command[]
+---@field [string] zcmp.Command[]|false `false` disables a preset's own binding for that key, the same as `{}`
 
 ---@alias zcmp.KeymapPreset "default" | "super-tab" | "enter" | "none"
 
----A keymap entry: the name of a |zcmp-commands| function, or a function taking
----the ZCmp API and returning whether it handled the key.
+---A keymap entry: the name of a |zcmp-commands| function, or a function
+---taking the commands table and returning whether it handled the key -- or,
+---per blink.cmp's own contract, a string of keys in |<Key>| notation, fed as
+---if typed. An empty string is the same as `false`.
 ---@alias zcmp.Command
 ---| string
----| fun(cmp: table): boolean?
+---| fun(cmp: table): boolean|string|nil
 
 ---@class zcmp.SourcesConfig
 ---@field default? string[] Provider ids, in 'complete' priority order
@@ -42,18 +46,17 @@
 ---`module` is a Lua module serving matches. One of the two is required.
 ---@class zcmp.Provider
 ---@field name? string Shown by `:ZCmp status` and `:checkhealth zcmp`
----@field flags? string[] Literal 'complete' flags, e.g. `{ '.', 'w', 'b' }`
+---@field flags? string[] zcmp's own; literal 'complete' flags, e.g. `{ '.', 'w', 'b' }`
 ---@field module? string Module exposing `source()` or `completefunc()`; see |zcmp-providers|
----@field opts? table Passed verbatim to the module's `enable()` and `source()`
+---@field opts? table Passed verbatim to the module's `enable()` and `source()`; for the built-in `lsp` provider, exactly `autotrigger` also reaches |vim.lsp.completion.enable()|, and only while `completion.menu.auto_show` is on -- `extend_trigger_characters` is zcmp's own trigger-character widening, and other `enable()` options (e.g. `convert`, `cmp`) are not passed through
 ---@field max_items? integer Cap, applied as 'complete's own `^{count}`
----@field enabled? boolean|fun(bufnr: integer): boolean
----@field available? fun(bufnr: integer): boolean Checked per buffer, after `enabled`
+---@field enabled? boolean|fun(bufnr: integer): boolean The function form's answer is read as a boolean, nil included: nil is false, like every other falsy value
+---@field available? fun(bufnr: integer): boolean Checked per buffer, once `enabled` has answered true. zcmp's own; blink.cmp's `enabled` takes the same shape, but it has nothing named `available`. Read as a boolean the same way: nil is false
 
 ---@class zcmp.CompletionConfig
----@field menu? { auto_show?: boolean } Open the menu as you type, i.e. 'autocomplete' (default true)
+---@field menu? { auto_show?: boolean, auto_show_delay_ms?: integer } `auto_show` opens the menu as you type, i.e. 'autocomplete' and the `lsp` provider's autotrigger (default true); `auto_show_delay_ms` is 'autocompletedelay' (default 200), which the autotrigger does not wait for
 ---@field documentation? { auto_show?: boolean } Documentation popup, i.e. `popup` in 'completeopt' (default true)
 ---@field list? zcmp.ListConfig
----@field trigger? { delay_ms?: integer } 'autocompletedelay' (default 200)
 
 ---@class zcmp.ListConfig
 ---@field max_items? integer Default cap for providers that set none
@@ -89,10 +92,9 @@
 ---@field providers table<string, zcmp.Provider>
 
 ---@class zcmp.ResolvedCompletion
----@field menu { auto_show: boolean }
+---@field menu { auto_show: boolean, auto_show_delay_ms: integer }
 ---@field documentation { auto_show: boolean }
 ---@field list { max_items?: integer, selection: { preselect: boolean, auto_insert: boolean } }
----@field trigger { delay_ms: integer }
 
 ---@class zcmp.ResolvedSnippets
 ---@field preset string
