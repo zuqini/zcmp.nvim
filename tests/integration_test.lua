@@ -499,6 +499,96 @@ describe('with a language server attached', function()
   -- maps <CR> to it. The `default` preset once left the key unmapped, and
   -- the first Enter over a server item closed the menu instead of opening a
   -- line.
+  -- vim.lsp.completion reaches the (widened) trigger list only after
+  -- `if vim.fn.pumvisible() ~= 0 then return end`, and `trigger()` carries the
+  -- same guard -- so a server that answers `isIncomplete = false` is asked
+  -- once and never again while a menu is up. With 'autocompletedelay' at 0,
+  -- zcmp's own sources hold one up from the first keystroke, which used to
+  -- mean the server's single answer was the one for that first character.
+  -- `retrigger` is what asks again; this server names the prefix it was asked
+  -- for, so the menu says which ask the items came from.
+  local NAMING_SERVER = [[
+    local function server(dispatchers)
+      local closing = false
+      local srv = {}
+      function srv.request(method, _, callback)
+        if method == 'initialize' then
+          callback(nil, { capabilities = { completionProvider = { triggerCharacters = { '.' } } } })
+        elseif method == 'textDocument/completion' then
+          local col = vim.api.nvim_win_get_cursor(0)[2]
+          local leader = vim.api.nvim_get_current_line():sub(1, col)
+          vim.defer_fn(function()
+            callback(nil, { isIncomplete = false, items = { { label = 'srv_' .. leader, kind = 1 } } })
+          end, 50)
+        else
+          callback(nil, nil)
+        end
+        return true, 1
+      end
+      function srv.notify(method)
+        if method == 'exit' then dispatchers.on_exit(0, 0) end
+        return true
+      end
+      function srv.is_closing() return closing end
+      function srv.terminate() closing = true end
+      return srv
+    end
+  ]]
+
+  ---Types `abc` one character at a time, letting the menu settle between
+  ---each -- not `scenario()`, which feeds a step's keys in one burst: typed
+  ---that way the leader is already `abc` before any menu exists, so the
+  ---server's first and only ask is for `abc` and the two configurations
+  ---cannot be told apart.
+  ---@param provider string The `lsp` provider table to configure with
+  ---@return table
+  local function typed_abc(provider)
+    local dir = tree()
+    -- `abcxyz` in the buffer keeps core's own menu up the whole way, which is
+    -- exactly the condition that locks the server out.
+    return run(NAMING_SERVER .. ([[
+      require('zcmp').setup({
+        sources = { default = { 'lsp', 'buffer' }, providers = { lsp = %s } },
+      })
+      vim.cmd('edit %s/main.txt')
+      vim.lsp.start({ name = 'fake', cmd = server, root_dir = %q }, { bufnr = 0 })
+
+      vim.defer_fn(function()
+        vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'abcxyz', '' })
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        feed('i')
+        local chars, index = { 'a', 'b', 'c' }, 0
+        local function tick()
+          index = index + 1
+          if not chars[index] then
+            emit('typed', { offered = offered(), lines = lines() })
+            return done()
+          end
+          feed(chars[index])
+          vim.defer_fn(tick, 500)
+        end
+        vim.defer_fn(tick, 300)
+      end, 500)
+    ]]):format(provider, dir, dir))
+  end
+
+  it('asks the server again as the word grows', function()
+    local results = typed_abc('{}')
+
+    assert.contains(results.typed.offered, 'abcxyz')
+    assert.contains(results.typed.offered, 'srv_abc')
+  end)
+
+  it('asks once, at the keystroke that opened the menu, with retrigger off', function()
+    local results = typed_abc('{ opts = { retrigger = false } }')
+
+    assert.contains(results.typed.offered, 'abcxyz')
+    assert.is_false(
+      vim.tbl_contains(results.typed.offered, 'srv_abc'),
+      'the server was re-asked with retrigger off: ' .. vim.inspect(results.typed.offered)
+    )
+  end)
+
   describe('a server item nothing marked', function()
     local TWO = server_answering("{ { label = 'logger', kind = 3 }, { label = 'logout', kind = 3 } }")
 

@@ -48,7 +48,7 @@
 ---@field name? string Shown by `:ZCmp status` and `:checkhealth zcmp`
 ---@field flags? string[] zcmp's own; literal 'complete' flags, e.g. `{ '.', 'w', 'b' }`
 ---@field module? string Module exposing `source()` or `completefunc()`; see |zcmp-providers|
----@field opts? table Passed verbatim to the module's `enable()` and `source()`; for the built-in `lsp` provider, exactly `autotrigger` also reaches |vim.lsp.completion.enable()|, and only while `completion.menu.auto_show` is on -- `extend_trigger_characters` is zcmp's own trigger-character widening, and other `enable()` options (e.g. `convert`, `cmp`) are not passed through
+---@field opts? table Passed verbatim to the module's `enable()` and `source()`; for the built-in `lsp` provider, exactly `autotrigger` also reaches |vim.lsp.completion.enable()|, and only while `completion.menu.auto_show` is on -- `extend_trigger_characters` (trigger-character widening) and `retrigger` (asking the server again while a menu is open) are zcmp's own, and other `enable()` options (e.g. `convert`, `cmp`) are not passed through
 ---@field max_items? integer Cap, applied as 'complete's own `^{count}`
 ---@field enabled? boolean|fun(bufnr: integer): boolean The function form's answer is read as a boolean, nil included: nil is false, like every other falsy value
 ---@field available? fun(bufnr: integer): boolean Checked per buffer, once `enabled` has answered true. zcmp's own; blink.cmp's `enabled` takes the same shape, but it has nothing named `available`. Read as a boolean the same way: nil is false

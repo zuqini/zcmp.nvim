@@ -70,6 +70,13 @@ local function check_environment()
   else
     vim.health.warn('vim.lsp.completion is missing — the LSP source cannot autotrigger')
   end
+  if type(vim.tbl_get(vim.lsp, 'completion', 'get')) ~= 'function' then
+    -- The one call `lsp.retrigger()` makes; without it the server is asked
+    -- once per menu, which is the gap `retrigger` exists to close.
+    vim.health.warn('vim.lsp.completion.get() is missing — the LSP source cannot be asked again as you type', {
+      'Set sources.providers.lsp.opts.retrigger = false to stop trying.',
+    })
+  end
 end
 
 local function check_setup()

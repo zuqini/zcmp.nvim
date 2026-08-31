@@ -210,6 +210,13 @@ lsp = {
   -- server that misbehaves under a widened list; autotrigger then only fires
   -- on the characters the server asked for.
   extend_trigger_characters = true,
+  -- Ask the server again as the word grows, while a menu is already open.
+  -- vim.lsp.completion will not: both its entry points give up on
+  -- `pumvisible()` unless the server asked to be re-asked by answering
+  -- `isIncomplete`, so widening the trigger list above buys an *opening*
+  -- keystroke, never a refreshing one. Without this the server's one answer
+  -- is the one for the character that opened the menu.
+  retrigger = true,
 },
 
 path = {
@@ -217,7 +224,7 @@ path = {
 },
 ```
 
-The two `lsp` keys are zcmp's own, and `setup()` checks them like any other
+The three `lsp` keys are zcmp's own, and `setup()` checks them like any other
 option: an unknown key or a wrong type is reported. So are `path`'s `limit`
 and the shipped snippet adapters' keys (`limit`, `documentation`,
 `show_condition` -- see below), once the provider reaches one of them. The

@@ -216,10 +216,42 @@ costs is the debounce, in buffers with no client to lose the race to;
 `'autocompletetimeout'` is core's own bound on a slow source there, and
 `completion.menu.auto_show = false` still stops the menu opening as you type.
 
-One limit is core's and remains: a source is asked once per cycle, at the
-keystroke that opens it. A source with nothing to offer for the first
-character that would have matched by the third never appears, because by then
-the session is `eval`. Deleting a character is the only thing that re-asks.
+Core still scans `'complete'` only once per cycle, at the keystroke that opens
+the menu, so a source with nothing to offer for the first character and a match
+by the third does not reappear on its own. For the server — the source where
+that matters most, since it is also the one that answers nothing to a single
+letter — the `lsp` provider's `retrigger` closes the gap; see below.
+
+### `retrigger`: asking the server again while a menu is open
+
+`vim.lsp.completion` will not do this by itself. Both of its entry points give
+up on `pumvisible()`:
+
+```lua
+-- on_insert_char_pre:  if vim.fn.pumvisible() ~= 0 then return end
+-- trigger():           if vim.fn.pumvisible() ~= 0 and not Context.isIncomplete then return end
+```
+
+The widened trigger list is consulted only *after* that first check, so
+widening buys an **opening** keystroke, never a refreshing one. The mechanism
+core intends for refreshing is `isIncomplete`, which is the server's decision:
+a server that answers `isIncomplete = true` (lua_ls after a `.`) is re-asked on
+every keystroke for free, and one that answers `false` (lua_ls on a plain
+keyword) is asked once. While `'autocompletedelay'` was non-zero this went
+unnoticed, because the menu kept collapsing to no matches and every collapse
+let the trigger list matter again.
+
+So with `retrigger` on — the default — ZCmp takes the menu down for the length
+of one synchronous call, asks through `vim.lsp.completion.get()`, and puts the
+same items straight back. The server's answer then merges into them, and is
+ranked against them, through `trigger()`'s own `prev_matches` path. ZCmp builds
+nothing and ranks nothing: what goes back is what was already on screen.
+
+It does nothing unless it has to. It runs only while a `vim.fn.complete()`
+session owns the menu — in core's own `keyword` session, `'complete'` is
+re-scanned every keystroke already — and it stands down while an item is
+selected, so `<C-n>` is never interrupted. Set `retrigger = false` to turn it
+off, and the server is asked once per menu, as core has it.
 
 Switching `vim.lsp.completion` on is also what buys the parts of LSP
 completion that are not a list of words. On accept, core expands a snippet

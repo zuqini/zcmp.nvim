@@ -22,7 +22,7 @@ local DEFAULTS = {
         available = function(bufnr)
           return require('zcmp.lsp').available(bufnr)
         end,
-        opts = { autotrigger = true, extend_trigger_characters = true },
+        opts = { autotrigger = true, extend_trigger_characters = true, retrigger = true },
       },
       path = {
         name = 'Path',
@@ -125,7 +125,7 @@ local PROVIDER_SHAPE = {
 ---`limit` is a `number` here and the contract's beyond that:
 ---`sources.limit()` says which numbers.
 local OPTS_SHAPES = {
-  ['zcmp.lsp'] = { autotrigger = 'boolean', extend_trigger_characters = 'boolean' },
+  ['zcmp.lsp'] = { autotrigger = 'boolean', extend_trigger_characters = 'boolean', retrigger = 'boolean' },
   ['zcmp.sources.path'] = { limit = 'number' },
   ['zcmp.sources.snippets.luasnip'] = { limit = 'number', documentation = 'boolean', show_condition = 'boolean' },
   ['zcmp.sources.snippets.nvim_snippets'] = { limit = 'number', documentation = 'boolean' },

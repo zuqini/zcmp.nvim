@@ -260,7 +260,8 @@ way, with the provider's `flags` still written.
 
 The built-in `lsp` and `path` providers take `opts` of their own, and so do
 the shipped snippet source modules (see |zcmp-snippet-source|): >lua
-    lsp  = { autotrigger = true, extend_trigger_characters = true },
+    lsp  = { autotrigger = true, extend_trigger_characters = true,
+             retrigger = true },
     path = { limit = 250 },
 <
 `extend_trigger_characters` is what widens the server's declared list to
@@ -269,7 +270,9 @@ turn it off for a server that misbehaves under a widened list. `autotrigger
 = false` switches |vim.lsp.completion|'s autotrigger off for the provider;
 `completion.menu.auto_show = false` switches it off too, and nothing delays
 it -- which is why zcmp holds 'autocompletedelay' at 0; see
-|zcmp-autocompletedelay|. Both keys are
+|zcmp-autocompletedelay|. `retrigger` is what asks the server again as a word
+grows past the keystroke that opened the menu -- see |zcmp-retrigger|. All
+three are
 zcmp's own, and setup() checks them like any other option -- an unknown key or
 a wrong type is reported -- as it does `path`'s `limit` and the shipped snippet
 adapters' keys once the provider reaches one of them. The check follows the
@@ -510,11 +513,38 @@ it costs is the debounce, in buffers with no client to lose the race to;
 'autocompletetimeout' is core's own bound on a slow source there, and
 `completion.menu.auto_show = false` still stops the menu opening as you type.
 
-One limit is core's and remains: a source is asked once per cycle, at the
-keystroke that opens it. A source with nothing to offer for the first
-character that would have matched by the third never appears, because by
-then the session is "eval". Deleting a character is the only thing that
-re-asks.
+Core still scans 'complete' only once per cycle, at the keystroke that opens
+the menu, so a source with nothing to offer for the first character and a
+match by the third does not reappear on its own. For the server -- the source
+where that matters most, since it is also the one with nothing to say to a
+single letter -- the `lsp` provider's `retrigger` closes the gap.
+
+                                                          *zcmp-retrigger*
+Asking the server again while a menu is open. ~
+
+|vim.lsp.completion| will not do this by itself. Both of its entry points
+give up on |pumvisible()|: `on_insert_char_pre` returns early on it, and
+`trigger()` returns early on it unless the last answer was `isIncomplete`.
+The widened trigger list is reached only *after* that check, so widening buys
+an *opening* keystroke, never a refreshing one. The mechanism core intends
+for refreshing is `isIncomplete`, which is the server's decision: one that
+answers true (lua_ls after a `.`) is re-asked every keystroke for free, and
+one that answers false (lua_ls on a plain keyword) is asked once. While
+'autocompletedelay' was non-zero this went unnoticed, because the menu kept
+collapsing to no matches and every collapse let the trigger list matter
+again.
+
+With `retrigger` on -- the default -- zcmp takes the menu down for the length
+of one synchronous call, asks through |vim.lsp.completion.get()|, and puts
+the same items straight back. The server's answer merges into them, and is
+ranked against them, through `trigger()`'s own `prev_matches` path. Nothing
+is built or ranked here: what goes back is what was already on screen.
+
+It does nothing unless it has to. It runs only while a |complete()| session
+owns the menu -- in core's own "keyword" session 'complete' is re-scanned
+every keystroke already -- and it stands down while an item is selected, so
+|i_CTRL-N| is never interrupted. `retrigger = false` turns it off, and the
+server is asked once per menu, as core has it.
 
 ==============================================================================
 8. SNIPPETS                                                     *zcmp-snippets*

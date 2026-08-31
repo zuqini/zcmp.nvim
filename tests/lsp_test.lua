@@ -503,6 +503,87 @@ end)
 -- into the same M._omnifunc(). Neither a client attached with no omnifunc
 -- route in 'complete', nor an omnifunc route with no client attached, is
 -- any of them.
+describe('asking the server again while a menu is open', function()
+  -- The whole point of the opt: vim.lsp.completion consults the (widened)
+  -- trigger list only after `if vim.fn.pumvisible() ~= 0 then return end`, so
+  -- with a menu on screen the server is never asked again unless it answered
+  -- `isIncomplete`. See lsp.lua's `retrigger()`.
+  it('installs the TextChangedP hook on the buffer it wired', function()
+    local bufnr = helpers.buffer()
+    vim.api.nvim_set_current_buf(bufnr)
+    require('zcmp').setup({ sources = { default = { 'lsp' } } })
+
+    assert.is_false(lsp.retriggering(bufnr))
+    start(bufnr)
+    helpers.settle(bufnr)
+    vim.wait(500, function()
+      return lsp.retriggering(bufnr)
+    end)
+
+    assert.is_true(lsp.retriggering(bufnr))
+  end)
+
+  it('leaves it off when the provider says retrigger = false', function()
+    local bufnr = helpers.buffer()
+    vim.api.nvim_set_current_buf(bufnr)
+    require('zcmp').setup({
+      sources = {
+        default = { 'lsp' },
+        providers = { lsp = { opts = { retrigger = false } } },
+      },
+    })
+
+    start(bufnr)
+    helpers.settle(bufnr)
+    vim.wait(200, function()
+      return lsp.retriggering(bufnr)
+    end)
+
+    assert.is_false(lsp.retriggering(bufnr))
+  end)
+
+  -- One hook per buffer, dropped with the last client -- the same lifecycle
+  -- `wired` has, so a buffer zcmp no longer drives is not left asking.
+  it('drops it once the last client is forgotten', function()
+    local bufnr = helpers.buffer()
+    vim.api.nvim_set_current_buf(bufnr)
+    require('zcmp').setup({ sources = { default = { 'lsp' } } })
+
+    local client = start(bufnr)
+    helpers.settle(bufnr)
+    vim.wait(500, function()
+      return lsp.retriggering(bufnr)
+    end)
+    assert.is_true(lsp.retriggering(bufnr))
+
+    lsp.forget(bufnr, client.id)
+
+    assert.is_false(lsp.retriggering(bufnr))
+  end)
+
+  it('is one hook however many clients the buffer holds', function()
+    local bufnr = helpers.buffer()
+    vim.api.nvim_set_current_buf(bufnr)
+    require('zcmp').setup({ sources = { default = { 'lsp' } } })
+
+    local first = start(bufnr)
+    -- A second *client*, not the same one again: vim.lsp.start() reuses a
+    -- client whose config matches, so the name has to differ.
+    local second_id = assert(vim.lsp.start({ name = 'zcmp-test-2', cmd = server }, { bufnr = bufnr }))
+    local second = assert(vim.lsp.get_client_by_id(second_id))
+    helpers.settle(bufnr)
+    vim.wait(500, function()
+      return lsp.retriggering(bufnr)
+    end)
+
+    lsp.forget(bufnr, first.id)
+    assert.is_true(lsp.retriggering(bufnr), 'dropped while a client still holds the buffer')
+
+    lsp.forget(bufnr, second.id)
+    assert.is_false(lsp.retriggering(bufnr))
+  end)
+end)
+
 describe('M.may_relocate()', function()
   it('answers false with nothing wired and nothing attached', function()
     local bufnr = helpers.buffer()
