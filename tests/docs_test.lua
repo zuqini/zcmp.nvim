@@ -130,3 +130,20 @@ describe('the documented defaults', function()
     end)
   end
 end)
+
+-- Vim help has no emphasis syntax: `*word*` defines a tag, and one already
+-- defined -- elsewhere, or twice in this file -- fails `:helptags`, which
+-- lazy.nvim runs on every install. Four commits in a row left one behind.
+describe('doc/zcmp.txt', function()
+  it('defines only tags of its own, and builds', function()
+    local dir = helpers.tempdir()
+    vim.fn.writefile(lines('doc/zcmp.txt'), dir .. '/zcmp.txt')
+
+    vim.cmd.helptags(dir)
+
+    for _, entry in ipairs(vim.fn.readfile(dir .. '/tags')) do
+      local tag = entry:match('^([^\t]+)')
+      assert.is_truthy(tag:lower():match('^:?zcmp'), ('doc/zcmp.txt defines a tag that is not its own: %s'):format(tag))
+    end
+  end)
+end)

@@ -48,6 +48,21 @@ function M.findstart()
   return (start or col + 1) - 1
 end
 
+---Normalises a field an adapter's own source may hand back as either a
+---string or a table of lines -- `M.complete()` below applies the same
+---string-or-nil contract to `trigger`, `description` and `body` once an
+---adapter has produced candidates; this is the join an adapter itself needs
+---while building one.
+---@param value string|string[]|nil
+---@param separator string
+---@return string?
+function M.joined(value, separator)
+  if type(value) == 'table' then
+    return table.concat(value, separator)
+  end
+  return type(value) == 'string' and value or nil
+end
+
 ---Word is decided by byte, and every byte of a multibyte character counts:
 ---the same class `zcmp.sources.path` admits, for the same reason. A letter
 ---like `é` never opens a split, and a partial character never becomes a tail

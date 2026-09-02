@@ -175,8 +175,8 @@ local SHAPES = {
 ---@type zcmp.ResolvedConfig
 M.options = vim.deepcopy(DEFAULTS)
 
----@param shape string|string[]|(string|boolean|table)[]
----@return (string|boolean|table)[]
+---@param shape string|string[]|(string|boolean)[]
+---@return (string|boolean)[]
 local function alternatives(shape)
   return type(shape) == 'table' and shape or { shape }
 end
@@ -279,12 +279,6 @@ local REMOVED = {
 ---(`keymap`, a provider's fields) has no positions to keep, so a key that is
 ---not a string there is reported and dropped before its value is even looked
 ---at, the same as a wrong-typed value would be.
----An alternatives list may hold one nested shape table (`keymap.__any`); a
----table-shaped value is then recursed into on the same terms as a named
----nested table (compacted if that nested shape is itself `__list`-shaped, and
----the `{}`-is-an-instruction rule applies), rather than merely typechecked by
----`matches()` -- which a non-table value still is, against the rest of the
----alternatives.
 ---@param opts table
 ---@param shapes table
 ---@param path string

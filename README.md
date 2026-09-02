@@ -249,9 +249,20 @@ nothing and ranks nothing: what goes back is what was already on screen.
 
 It does nothing unless it has to. It runs only while a `vim.fn.complete()`
 session owns the menu — in core's own `keyword` session, `'complete'` is
-re-scanned every keystroke already — and it stands down while an item is
-selected, so `<C-n>` is never interrupted. Set `retrigger = false` to turn it
-off, and the server is asked once per menu, as core has it.
+re-scanned every keystroke already — and only on a typed key: the
+`InsertCharPre` a keystroke fires is what the ask is for, and every other way
+the menu can change — browsing it with `<C-n>`/`<C-p>`, the server's own
+answer opening it, the ask's own two `complete()` calls — has no keystroke
+behind it and is left alone. An item a source **preselected** and you never
+touched counts for nothing either way: you are typing past it, not choosing
+it. And a menu holding only the server's items is left to core, which
+refreshes one the server marked `isIncomplete` in place and needs no re-ask
+for one it marked complete; taking it down would leave nothing to put back.
+Set `retrigger = false` to turn it off, and the server is asked once per menu,
+as core has it.
+
+All of it is a workaround. `vim.lsp.completion` has no way to be asked while a
+menu is open; the day it grows one, the option goes with it.
 
 Switching `vim.lsp.completion` on is also what buys the parts of LSP
 completion that are not a list of words. On accept, core expands a snippet
@@ -273,6 +284,7 @@ sources = {
       opts = {
         autotrigger = true,               -- vim.lsp.completion's own trigger
         extend_trigger_characters = true, -- widen the list to every letter
+        retrigger = true,                 -- ask again as the word grows
       },
     },
   },
@@ -283,7 +295,7 @@ Turn `extend_trigger_characters` off for a server that misbehaves under a
 widened list; autotrigger then only fires on the characters it asked for.
 `autotrigger = false` switches the second path off for this provider alone,
 as `completion.menu.auto_show = false` does for the menu as a whole.
-Both keys are zcmp's own, and `setup()` checks them like any other option:
+These keys are zcmp's own, and `setup()` checks them like any other option:
 an unknown key or a wrong type is reported.
 
 Delete a `vim.lsp.completion.enable(...)` call your own `LspAttach` handler

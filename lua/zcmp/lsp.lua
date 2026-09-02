@@ -34,19 +34,25 @@ local wired = {}
 ---widened it and is only put back once the last one goes.
 ---@type table<integer, { provider: any, trigger_characters: string[]? }>
 local original = {}
-
 local RETRIGGER_GROUP = 'zcmp.lsp'
 
----The |TextChangedP| autocmd id per buffer ZCmp asks the server again in, and
----the leader it was last asked for. One autocmd per buffer, however many
----clients the buffer holds.
----@type table<integer, integer>
+---The autocmd ids per buffer ZCmp asks the server again in. One set per
+---buffer, however many clients the buffer holds.
+---@type table<integer, integer[]>
 local retriggering = {}
----@type table<integer, string>
-local last_leader = {}
 
----The two |complete()| calls in `retrigger()` fire |TextChangedP| themselves.
-local refreshing = false
+---Buffers where a key was typed and the text it changes has not yet been
+---reported. Set by |InsertCharPre| and consumed by whichever change event the
+---character lands as: |TextChangedP| with a menu on screen, where it is the
+---one thing `retrigger()` asks about, or |TextChangedI| with none, where core
+---owns whatever menu opens next. Everything else that fires |TextChangedP| --
+---|i_CTRL-N| and |i_CTRL-P| browsing the menu, the |complete()| a server's
+---answer lands through, `retrigger()`'s own two calls -- arrives with the flag
+---already down, and so is never read as typing. |InsertLeave| drops a flag no
+---change event consumed, for a keystroke another plugin's |InsertCharPre|
+---handler swallowed.
+---@type table<integer, true>
+local typed = {}
 
 ---Ask the server again for what is under the cursor now, without losing the
 ---menu core has already built.
@@ -70,65 +76,55 @@ local refreshing = false
 ---redraw falls between them.
 ---@param bufnr integer
 local function retrigger(bufnr)
-  if refreshing or vim.api.nvim_get_current_buf() ~= bufnr then
-    return
-  end
-  if vim.fn.pumvisible() == 0 then
-    -- Nothing to hold the server off: the next keystroke reaches the trigger
-    -- list on its own. Forgetting the leader re-arms the next menu.
-    last_leader[bufnr] = nil
+  local was_typed = typed[bufnr]
+  typed[bufnr] = nil
+  if not was_typed or vim.api.nvim_get_current_buf() ~= bufnr then
     return
   end
 
+  local info = vim.fn.complete_info({ 'mode', 'items', 'matches' })
   -- `eval` is the session |complete()| owns, and the only one that needs this.
   -- A `keyword` session is core's own loop, which re-scans 'complete' -- and
   -- so re-reaches the omnifunc -- every keystroke already; replacing it with
   -- a list of ZCmp's own would be the bug rather than the fix.
-  local info = vim.fn.complete_info({ 'mode', 'items', 'matches', 'selected' })
   if info.mode ~= 'eval' then
     return
   end
-  -- An item under the cursor is a menu being navigated, not a word being
-  -- typed: |i_CTRL-N| writes the item into the line even under `noinsert`, so
-  -- the leader below reads as a change, and re-completing drops the selection
-  -- that was just made.
-  if (info.selected or -1) >= 0 then
-    return
-  end
-
-  local col = vim.api.nvim_win_get_cursor(0)[2]
-  local leader = vim.api.nvim_get_current_line():sub(1, col)
-  if leader == last_leader[bufnr] then
-    return
-  end
-  last_leader[bufnr] = leader
 
   -- `trigger()`'s own `prev_matches` filter, applied here for the same reason
   -- it applies it there: what still matches, minus the server's own items,
-  -- which its fresh answer replaces.
+  -- which its fresh answer replaces. Asking for `matches` alongside `items` is
+  -- what puts the `match` flag on each item.
   local kept = {}
   for _, item in ipairs(info.items or {}) do
-    if item.match and not vim.tbl_get(item, 'user_data', 'nvim', 'lsp') then
+    if item.match ~= false and not M.is_server_item(item) then
       kept[#kept + 1] = item
     end
+  end
+  -- A menu holding only the server's own items is one core already refreshes
+  -- as the word grows: `trigger()` passes its `pumvisible()` guard when the
+  -- server answered `isIncomplete`, and swaps the menu in place; when it
+  -- answered complete, the list on screen is the whole answer and core's
+  -- narrowing of it is right. Taking such a menu down leaves nothing to put
+  -- back, so the pum would be blank for a round trip on every keystroke of
+  -- the word, which is a menu after `vim.` with lua_ls.
+  if #kept == 0 then
+    return
   end
 
   -- The column `trigger()` restarts at, so nothing moves under the answer
   -- about to merge into it -- the same relocation `sources.trim_head()`
   -- already covers.
+  local col = vim.api.nvim_win_get_cursor(0)[2]
+  local leader = vim.api.nvim_get_current_line():sub(1, col)
   local start = vim.fn.match(leader, '\\k*$') + 1
-  refreshing = true
-  local ok = pcall(function()
+  pcall(function()
     vim.fn.complete(start, {})
     vim.lsp.completion.get()
   end)
   -- Unconditional: a raise between those two would otherwise leave the buffer
   -- with no menu at all, mid-word.
   pcall(vim.fn.complete, start, kept)
-  refreshing = false
-  if not ok then
-    last_leader[bufnr] = nil
-  end
 end
 
 ---@param bufnr integer
@@ -136,25 +132,47 @@ local function install_retrigger(bufnr)
   if retriggering[bufnr] then
     return
   end
-  retriggering[bufnr] = vim.api.nvim_create_autocmd('TextChangedP', {
-    group = vim.api.nvim_create_augroup(RETRIGGER_GROUP, { clear = false }),
-    buffer = bufnr,
-    desc = 'zcmp: ask the server again while a vim.fn.complete() menu is open',
-    callback = function(args)
-      retrigger(args.buf)
-    end,
-  })
+  local group = vim.api.nvim_create_augroup(RETRIGGER_GROUP, { clear = false })
+  retriggering[bufnr] = {
+    vim.api.nvim_create_autocmd('TextChangedP', {
+      group = group,
+      buffer = bufnr,
+      desc = 'zcmp: ask the server again while a vim.fn.complete() menu is open',
+      callback = function(args)
+        retrigger(args.buf)
+      end,
+    }),
+    vim.api.nvim_create_autocmd('InsertCharPre', {
+      group = group,
+      buffer = bufnr,
+      desc = 'zcmp: a key was typed; the change it makes is the one to ask about',
+      callback = function(args)
+        typed[args.buf] = true
+      end,
+    }),
+    -- Fires only with no menu on screen, so the character landed where core
+    -- opens the next menu itself -- through 'autocomplete', or the
+    -- autotrigger's answer -- and the |TextChangedP| that opening fires must
+    -- not read as typing past a menu that was not there.
+    vim.api.nvim_create_autocmd({ 'TextChangedI', 'InsertLeave' }, {
+      group = group,
+      buffer = bufnr,
+      desc = 'zcmp: the typed key landed with no menu to ask about',
+      callback = function(args)
+        typed[args.buf] = nil
+      end,
+    }),
+  }
 end
 
 ---@param bufnr integer
 local function remove_retrigger(bufnr)
-  local id = retriggering[bufnr]
-  if id then
-    -- The autocmd is buffer-local, so wiping the buffer has already taken it.
+  for _, id in ipairs(retriggering[bufnr] or {}) do
+    -- The autocmds are buffer-local, so wiping the buffer has already taken them.
     pcall(vim.api.nvim_del_autocmd, id)
-    retriggering[bufnr] = nil
   end
-  last_leader[bufnr] = nil
+  retriggering[bufnr] = nil
+  typed[bufnr] = nil
 end
 
 ---Whether ZCmp is asking the server again as `bufnr` is typed in. For
@@ -177,6 +195,18 @@ end
 ---@return string
 function M.source()
   return 'Fv:lua.vim.lsp.omnifunc'
+end
+
+---Whether `item` is one |vim.lsp.completion|'s restart put on screen, rather
+---than any of ZCmp's own sources -- the `user_data.nvim.lsp` mark it writes
+---on every item it builds. Lives here, not beside the `item.match` filter or
+---`sources.trim_head()` that each read it, because it is a fact about
+---`vim.lsp.completion`'s own private marking, and this module already owns
+---that class of fact (see `M.may_relocate()`).
+---@param item table
+---@return boolean
+function M.is_server_item(item)
+  return vim.tbl_get(item, 'user_data', 'nvim', 'lsp') and true or false
 end
 
 ---Whether `vim.lsp.completion`'s restart can have relocated a completed

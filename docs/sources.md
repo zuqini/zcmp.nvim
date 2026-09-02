@@ -369,6 +369,11 @@ as the shipped snippet core does: the two handlers are in different augroups,
 so which fires first is nothing to rely on, and the trim is idempotent, so
 it does not matter which ran before it.
 
+The key is a workaround, and stays in the contract only while core's restart
+re-completes every kept item at one column. A module that records it loses
+nothing the day core places each item at its own start: the trim is then a
+no-op, and the key is ignored.
+
 A module that records nothing -- the default provider, zsnip, or any other
 plugin's function source -- is still put back when the text before the word
 ends with the word's own head, typed exactly: `console.` ahead of

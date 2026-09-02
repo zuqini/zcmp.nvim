@@ -40,6 +40,54 @@ local function entry(report, pattern)
   return nil
 end
 
+---An in-process language server that answers completion, so a
+---completion-capable client can be attached without a binary to talk to.
+---@param dispatchers vim.lsp.rpc.Dispatchers
+local function server(dispatchers)
+  local closing = false
+  return {
+    request = function(method, _, callback)
+      if method == 'initialize' then
+        callback(nil, { capabilities = { completionProvider = { triggerCharacters = { '.' } } } })
+      elseif method == 'shutdown' then
+        callback(nil, nil)
+      end
+      return true, 1
+    end,
+    notify = function(method)
+      if method == 'exit' then
+        dispatchers.on_exit(0, 15)
+      end
+      return true
+    end,
+    is_closing = function()
+      return closing
+    end,
+    terminate = function()
+      closing = true
+      dispatchers.on_exit(0, 15)
+    end,
+  }
+end
+
+---@param bufnr integer
+local function start(bufnr)
+  local id = assert(vim.lsp.start({ name = 'zcmp-health-test', cmd = server }, { bufnr = bufnr }))
+  vim.wait(2000, function()
+    return #vim.lsp.get_clients({ bufnr = bufnr }) > 0
+  end)
+  return id
+end
+
+local function stop_clients()
+  for _, client in ipairs(vim.lsp.get_clients()) do
+    client:stop()
+  end
+  vim.wait(2000, function()
+    return #vim.lsp.get_clients() == 0
+  end)
+end
+
 before_each(helpers.reset)
 after_each(helpers.cleanup)
 
@@ -366,5 +414,58 @@ describe(':checkhealth zcmp', function()
     require('zcmp.health').check()
 
     assert.is_nil(entry(report, "'completeopt' is"))
+  end)
+
+  describe('the LSP retrigger hook', function()
+    after_each(stop_clients)
+
+    it('reports it on once a completion-capable client is attached', function()
+      require('zcmp').setup({ sources = { default = { 'lsp' } } })
+      local bufnr = helpers.buffer()
+      helpers.settle(bufnr)
+      start(bufnr)
+      vim.wait(500, function()
+        return require('zcmp.lsp').retriggering(bufnr)
+      end)
+
+      local report = recorder()
+      require('zcmp.health').check(bufnr)
+
+      assert.are.equal('ok', entry(report, 'asking the LSP source again').kind)
+    end)
+
+    it('warns with retrigger = false among the reasons', function()
+      require('zcmp').setup({
+        sources = { default = { 'lsp' }, providers = { lsp = { opts = { retrigger = false } } } },
+      })
+      local bufnr = helpers.buffer()
+      helpers.settle(bufnr)
+      start(bufnr)
+      vim.wait(200, function()
+        return require('zcmp.lsp').retriggering(bufnr)
+      end)
+
+      local report = recorder()
+      require('zcmp.health').check(bufnr)
+
+      local found = entry(report, 'not asking the LSP source again')
+      assert.are.equal('warn', found.kind)
+      assert.is_true(table.concat(found.advice, '\n'):find('sources.providers.lsp.opts.retrigger', 1, true) ~= nil)
+    end)
+
+    it('warns when nothing installed the hook for an unrelated reason', function()
+      require('zcmp').setup({ sources = { default = { 'buffer' } } })
+      local bufnr = helpers.buffer()
+      helpers.settle(bufnr)
+      start(bufnr)
+      vim.wait(200, function()
+        return require('zcmp.lsp').available(bufnr)
+      end)
+
+      local report = recorder()
+      require('zcmp.health').check(bufnr)
+
+      assert.are.equal('warn', entry(report, 'not asking the LSP source again').kind)
+    end)
   end)
 end)

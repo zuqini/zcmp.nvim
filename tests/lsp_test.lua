@@ -1,6 +1,17 @@
+local child = require('child')
 local config = require('zcmp.config')
 local helpers = require('helpers')
 local lsp = require('zcmp.lsp')
+
+local ROOT = vim.fn.getcwd()
+
+---@param fragment string
+---@return table
+local function run(fragment)
+  local results, log = child.run(fragment, ROOT, helpers.tempdir())
+  assert.is_true(next(results) ~= nil, 'child produced nothing:\n' .. log)
+  return results
+end
 
 ---An in-process language server that answers completion, so that the LSP hook
 ---can be exercised without a binary to talk to.
@@ -43,11 +54,18 @@ local function start(bufnr)
 end
 
 ---vim.lsp.completion has no "is it on" to ask. Its autotrigger is an
----InsertCharPre autocmd on the buffer, and nothing else installs one here.
+---InsertCharPre autocmd on the buffer, and the only other one here is ZCmp's
+---own retrigger hook, in the `zcmp.lsp` group.
 ---@param bufnr integer
 ---@return integer
 local function autotriggers(bufnr)
-  return #vim.api.nvim_get_autocmds({ event = 'InsertCharPre', buffer = bufnr })
+  local count = 0
+  for _, autocmd in ipairs(vim.api.nvim_get_autocmds({ event = 'InsertCharPre', buffer = bufnr })) do
+    if autocmd.group_name ~= 'zcmp.lsp' then
+      count = count + 1
+    end
+  end
+  return count
 end
 
 local function stop()
@@ -581,6 +599,456 @@ describe('asking the server again while a menu is open', function()
 
     lsp.forget(bufnr, second.id)
     assert.is_false(lsp.retriggering(bufnr))
+  end)
+
+  -- What `retrigger()` asks about is a typed key and nothing else: the
+  -- |InsertCharPre| a keystroke fires, consumed by whichever change event the
+  -- character lands as. Every other way |TextChangedP| fires -- browsing the
+  -- menu, a server's answer opening one, `retrigger()`'s own two |complete()|
+  -- calls -- arrives with no keystroke pending. |TextChangedP| reports no
+  -- leader of its own, so `retrigger()` reads the line and the cursor.
+  describe('the guards on the ask', function()
+    local function armed(bufnr)
+      vim.api.nvim_set_current_buf(bufnr)
+      require('zcmp').setup({ sources = { default = { 'lsp' } } })
+      start(bufnr)
+      helpers.settle(bufnr)
+      vim.wait(500, function()
+        return lsp.retriggering(bufnr)
+      end)
+      assert.is_true(lsp.retriggering(bufnr))
+
+      local calls = { asks = 0, completes = {} }
+      helpers.stub(vim.lsp.completion, 'get', function()
+        calls.asks = calls.asks + 1
+      end)
+      helpers.stub(vim.fn, 'complete', function(col, items)
+        calls.completes[#calls.completes + 1] = { col = col, items = items }
+      end)
+      return calls
+    end
+
+    local function key(bufnr)
+      vim.api.nvim_exec_autocmds('InsertCharPre', { buffer = bufnr })
+    end
+
+    -- A change with the menu up, however it came about.
+    local function changed(bufnr, leader, pum)
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { leader })
+      vim.api.nvim_win_set_cursor(0, { 1, #leader })
+      helpers.pum(pum)
+      vim.api.nvim_exec_autocmds('TextChangedP', { buffer = bufnr })
+    end
+
+    local function typed(bufnr, leader, pum)
+      key(bufnr)
+      changed(bufnr, leader, pum)
+    end
+
+    -- The keystroke that lands with the menu already gone: a word no item
+    -- matches any more collapses it, and |TextChangedP| fires only while a
+    -- menu is up, so the change is reported with none.
+    local function typed_with_no_menu(bufnr, leader)
+      key(bufnr)
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { leader })
+      vim.api.nvim_win_set_cursor(0, { 1, #leader })
+      helpers.pum(false)
+      vim.api.nvim_exec_autocmds('TextChangedI', { buffer = bufnr })
+    end
+
+    local OURS = { mode = 'eval', items = { { word = 'alpha', match = true } }, selected = -1 }
+
+    it('asks for a typed key, and for nothing else', function()
+      local bufnr = helpers.buffer()
+      local calls = armed(bufnr)
+
+      typed(bufnr, 'ab', OURS)
+      assert.are.equal(1, calls.asks)
+
+      -- The events the ask's own two |complete()| calls fire, and the one the
+      -- server's answer fires: a change, but no keystroke behind it.
+      changed(bufnr, 'ab', OURS)
+      changed(bufnr, 'ab', OURS)
+      assert.are.equal(1, calls.asks)
+
+      typed(bufnr, 'abc', OURS)
+      assert.are.equal(2, calls.asks)
+    end)
+
+    -- A `keyword` session is core's own loop, which re-scans 'complete' every
+    -- keystroke already. The keystroke is spent there: the `eval` session the
+    -- omnifunc's answer turns it into, for the same text, is not new typing.
+    it('does not ask in a keyword session, and spends the keystroke there', function()
+      local bufnr = helpers.buffer()
+      local calls = armed(bufnr)
+
+      typed(bufnr, 'ab', { mode = 'keyword', items = OURS.items, selected = -1 })
+      assert.are.equal(0, calls.asks)
+
+      changed(bufnr, 'ab', OURS)
+      assert.are.equal(0, calls.asks, 'the keyword session did not consume the keystroke')
+
+      typed(bufnr, 'abc', OURS)
+      assert.are.equal(1, calls.asks)
+    end)
+
+    -- A keystroke with no menu on screen is core's to answer: 'autocomplete'
+    -- or the autotrigger opens the next menu, and the |TextChangedP| that
+    -- opening fires is the server's answer for exactly this text.
+    it('does not ask for the menu that opening the menu announced', function()
+      local bufnr = helpers.buffer()
+      local calls = armed(bufnr)
+
+      typed_with_no_menu(bufnr, 'a')
+      changed(bufnr, 'a', OURS)
+
+      assert.are.equal(0, calls.asks)
+    end)
+
+    -- |i_CTRL-N| writes the item into the line and |i_CTRL-P| back off it
+    -- writes the original text back, so the leader changes twice with no key
+    -- typed. Asking on either would re-fetch text already answered for, and
+    -- re-completing would drop the selection just made.
+    it('does not ask while the user is browsing the menu', function()
+      local bufnr = helpers.buffer()
+      local calls = armed(bufnr)
+      local items = { { word = 'alpha', match = true }, { word = 'srv_a', match = true } }
+
+      typed(bufnr, 'a', { mode = 'eval', items = items, selected = -1 })
+      assert.are.equal(1, calls.asks)
+
+      changed(bufnr, 'alpha', { mode = 'eval', items = items, selected = 0 })
+      changed(bufnr, 'srv_a', { mode = 'eval', items = items, selected = 1 })
+      changed(bufnr, 'a', { mode = 'eval', items = items, selected = -1 })
+
+      assert.are.equal(1, calls.asks)
+    end)
+
+    -- An item a source asked for with `preselect` sits under the cursor
+    -- without anyone having moved onto it. It is nothing to stand down for:
+    -- reading it as a selection froze the menu on the answer for the word's
+    -- first letter, and left that answer selected, so accepting it inserted a
+    -- word the leader had grown past.
+    it('keeps asking while an item the source preselected is under the cursor', function()
+      local bufnr = helpers.buffer()
+      local calls = armed(bufnr)
+      local preselected = {
+        mode = 'eval',
+        items = {
+          { word = 'stale', match = false },
+          { word = 'srv_a', match = true, preselect = 1 },
+          { word = 'alpha', match = true },
+        },
+        selected = 0,
+      }
+
+      typed_with_no_menu(bufnr, 'a')
+      changed(bufnr, 'a', preselected)
+      assert.are.equal(0, calls.asks)
+
+      typed(bufnr, 'ab', preselected)
+      assert.are.equal(1, calls.asks, 'a preselected item was read as a menu being navigated')
+
+      typed(bufnr, 'abc', preselected)
+      assert.are.equal(2, calls.asks)
+    end)
+
+    -- What goes back is what `trigger()`'s own `prev_matches` filter would
+    -- keep: every item still matching, minus the server's, which its answer
+    -- replaces -- at the keyword boundary `trigger()` restarts at.
+    it('takes the menu down and puts back what still matched', function()
+      local bufnr = helpers.buffer()
+      local calls = armed(bufnr)
+      local menu = {
+        mode = 'eval',
+        items = {
+          { word = 'stale', match = false },
+          { word = 'alpha', match = true },
+          { word = 'srv_a', match = true, user_data = { nvim = { lsp = { client_id = 1 } } } },
+        },
+        selected = -1,
+      }
+
+      typed(bufnr, 'x a', menu)
+
+      assert.are.equal(1, calls.asks)
+      assert.are.same({
+        { col = 3, items = {} },
+        { col = 3, items = { { word = 'alpha', match = true } } },
+      }, calls.completes)
+    end)
+
+    -- A menu holding only the server's items is core's to refresh: an
+    -- `isIncomplete` answer lets `trigger()` past its own `pumvisible()`
+    -- guard and it swaps the menu in place, and a complete one needs no
+    -- re-ask. Taking it down leaves nothing to put back, so the pum would be
+    -- blank for a round trip on every keystroke of the word.
+    it("leaves a menu holding only the server's items alone", function()
+      local bufnr = helpers.buffer()
+      local calls = armed(bufnr)
+      local server_only = {
+        mode = 'eval',
+        items = {
+          { word = 'alpha', match = false },
+          { word = 'srv_a', match = true, user_data = { nvim = { lsp = { client_id = 1 } } } },
+        },
+        selected = -1,
+      }
+
+      typed(bufnr, 'ab', server_only)
+
+      assert.are.equal(0, calls.asks)
+      assert.are.same({}, calls.completes)
+    end)
+
+    -- A keystroke that leaves nothing matching collapses the menu, and the one
+    -- after it opens a fresh one from the server's own answer. Read as typing
+    -- past the menu that is not there, that menu's opening event would tear
+    -- it straight back down to re-fetch the text it was the answer for.
+    it('forgets the keystroke once it lands with no menu on screen', function()
+      local bufnr = helpers.buffer()
+      local calls = armed(bufnr)
+
+      typed(bufnr, 'al', OURS)
+      assert.are.equal(1, calls.asks)
+
+      typed_with_no_menu(bufnr, 'alx')
+      changed(bufnr, 'alxy', OURS)
+      assert.are.equal(1, calls.asks, 'the keystroke outlived the menu it collapsed')
+
+      typed(bufnr, 'alxyz', OURS)
+      assert.are.equal(2, calls.asks)
+    end)
+
+    -- Another plugin's |InsertCharPre| handler can swallow the character, so
+    -- no change event ever consumes the keystroke. Leaving insert mode drops
+    -- it, and a session ended by |i_CTRL-C| -- which fires no |InsertLeave|
+    -- -- is covered by the next session's first keystroke, which lands with
+    -- no menu on screen either.
+    it('forgets a keystroke nothing consumed', function()
+      local bufnr = helpers.buffer()
+      local calls = armed(bufnr)
+
+      key(bufnr)
+      vim.api.nvim_exec_autocmds('InsertLeave', { buffer = bufnr })
+      changed(bufnr, 'a', OURS)
+      assert.are.equal(0, calls.asks, 'the keystroke outlived the insert session')
+
+      key(bufnr)
+      typed_with_no_menu(bufnr, 'z')
+      changed(bufnr, 'z', OURS)
+      assert.are.equal(0, calls.asks, 'the keystroke outlived the session <C-c> ended')
+
+      typed(bufnr, 'zz', OURS)
+      assert.are.equal(1, calls.asks)
+    end)
+  end)
+
+  -- The same rule end to end, in a real menu against a server that takes a
+  -- real round trip to answer. `alx` matches nothing on screen, so the menu
+  -- collapses with no |TextChangedP| to announce it; the `y` then reaches the
+  -- autotrigger, which asks, and whose answer opens a menu from nothing. That
+  -- menu's own opening event must not be read as typing past the menu before
+  -- it -- the ask that follows re-fetches the text just answered for, and
+  -- takes the menu down for the length of it.
+  it('asks once for a menu the server\'s own answer opened', function()
+    local dir = helpers.tempdir()
+    helpers.write(dir .. '/main.txt', 'alpha\n')
+
+    local results = run(([[
+      local requests = {}
+      local function server(dispatchers)
+        return {
+          request = function(method, params, callback)
+            if method == 'initialize' then
+              callback(nil, { capabilities = { completionProvider = { triggerCharacters = { '.' } } } })
+            elseif method == 'textDocument/completion' then
+              local line = vim.api.nvim_buf_get_lines(0, params.position.line, params.position.line + 1, false)[1]
+              local leader = (line or ''):sub(1, params.position.character)
+              local word = leader:sub(vim.fn.match(leader, '\\k*$') + 1)
+              requests[#requests + 1] = word
+              -- What makes this server real enough to reproduce anything: the
+              -- answer lands after the keystroke that asked for it.
+              vim.defer_fn(function()
+                callback(nil, { isIncomplete = false, items = { { label = word .. '_srv' } } })
+              end, 50)
+            elseif method == 'shutdown' then
+              callback(nil, nil)
+            end
+            return true, 1
+          end,
+          notify = function(method)
+            if method == 'exit' then
+              dispatchers.on_exit(0, 15)
+            end
+            return true
+          end,
+          is_closing = function()
+            return false
+          end,
+          terminate = function()
+            dispatchers.on_exit(0, 15)
+          end,
+        }
+      end
+
+      require('zcmp').setup({ sources = { default = { 'lsp', 'buffer' } } })
+      vim.cmd('edit %s')
+      vim.lsp.start({ name = 'zcmp-test', cmd = server }, { bufnr = 0 })
+
+      -- Whether the menu the answer opens stays up, sampled across the round
+      -- trip a second ask would spend with it taken down.
+      local samples = {}
+      local function sample(remaining)
+        samples[#samples + 1] = vim.fn.pumvisible()
+        if remaining > 0 then
+          vim.defer_fn(function()
+            sample(remaining - 1)
+          end, 10)
+        end
+      end
+
+      local keys = { 'i', 'a', 'l', 'x', 'y' }
+      local index = 0
+      local function step()
+        index = index + 1
+        local key = keys[index]
+        if not key then
+          emit('requests', requests)
+          emit('offered', offered())
+          emit('samples', samples)
+          return done()
+        end
+        feed(key)
+        if key == 'y' then
+          sample(40)
+        end
+        vim.defer_fn(step, 500)
+      end
+
+      vim.defer_fn(function()
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        step()
+      end, 800)
+    ]]):format(dir .. '/main.txt'))
+
+    local asked = {}
+    for _, word in ipairs(results.requests) do
+      asked[word] = (asked[word] or 0) + 1
+    end
+    assert.are.equal(1, asked.alxy, 'asked more than once for the same text: ' .. vim.inspect(results.requests))
+    assert.contains(results.offered, 'alxy_srv')
+
+    local opened, blinked = false, false
+    for _, visible in ipairs(results.samples) do
+      if visible == 1 then
+        opened = true
+      elseif opened then
+        blinked = true
+      end
+    end
+    assert.is_true(opened, 'no menu ever opened: ' .. vim.inspect(results.samples))
+    assert.is_false(blinked, 'the menu the answer opened was taken down: ' .. vim.inspect(results.samples))
+  end)
+
+  -- After a trigger character the menu holds only the server's items, and a
+  -- server answering `isIncomplete` is re-asked by core in place on every
+  -- keystroke: `trigger()` passes its own `pumvisible()` guard for it. Taking
+  -- that menu down leaves nothing to put back, so the pum was blank for a
+  -- round trip on every keystroke of the word, with two requests for each.
+  it("leaves a menu holding only the server's items to core", function()
+    local results = run([[
+      local requests = {}
+      local function server(dispatchers)
+        return {
+          request = function(method, params, callback)
+            if method == 'initialize' then
+              callback(nil, { capabilities = { completionProvider = { triggerCharacters = { '.' } } } })
+            elseif method == 'textDocument/completion' then
+              local line = vim.api.nvim_buf_get_lines(0, params.position.line, params.position.line + 1, false)[1]
+              requests[#requests + 1] = (line or ''):sub(1, params.position.character)
+              vim.defer_fn(function()
+                callback(nil, { isIncomplete = true, items = { { label = 'tbcd' }, { label = 'tbce' } } })
+              end, 150)
+            elseif method == 'shutdown' then
+              callback(nil, nil)
+            end
+            return true, 1
+          end,
+          notify = function(method)
+            if method == 'exit' then
+              dispatchers.on_exit(0, 15)
+            end
+            return true
+          end,
+          is_closing = function()
+            return false
+          end,
+          terminate = function()
+            dispatchers.on_exit(0, 15)
+          end,
+        }
+      end
+
+      require('zcmp').setup({ sources = { default = { 'lsp', 'buffer' } } })
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, { '' })
+      vim.lsp.start({ name = 'zcmp-test', cmd = server }, { bufnr = 0 })
+
+      local samples = {}
+      local function sample(remaining)
+        samples[#samples + 1] = vim.fn.pumvisible()
+        if remaining > 0 then
+          vim.defer_fn(function()
+            sample(remaining - 1)
+          end, 10)
+        end
+      end
+
+      local keys = { 'i', 'x', '.', 't', 'b', 'c' }
+      local index = 0
+      local function step()
+        index = index + 1
+        local key = keys[index]
+        if not key then
+          emit('requests', requests)
+          emit('offered', offered())
+          emit('samples', samples)
+          return done()
+        end
+        feed(key)
+        if key == 'b' or key == 'c' then
+          sample(30)
+        end
+        vim.defer_fn(step, 500)
+      end
+
+      vim.defer_fn(step, 800)
+    ]])
+
+    assert.contains(results.offered, 'tbcd')
+    local asked = {}
+    for _, text in ipairs(results.requests) do
+      asked[text] = (asked[text] or 0) + 1
+    end
+    assert.are.equal(1, asked['x.tb'], 'asked more than once for the same text: ' .. vim.inspect(results.requests))
+    assert.are.equal(1, asked['x.tbc'], 'asked more than once for the same text: ' .. vim.inspect(results.requests))
+    for _, visible in ipairs(results.samples) do
+      assert.are.equal(1, visible, 'the menu was taken down: ' .. vim.inspect(results.samples))
+    end
+  end)
+end)
+
+describe('M.is_server_item()', function()
+  it('answers true for an item the restart marked', function()
+    assert.is_true(lsp.is_server_item({ user_data = { nvim = { lsp = { completion_item = {} } } } }))
+  end)
+
+  it('answers false for a plain item', function()
+    assert.is_false(lsp.is_server_item({ word = 'foo' }))
+  end)
+
+  it('answers false for an item with unrelated user_data', function()
+    assert.is_false(lsp.is_server_item({ user_data = { zcmp_start = 0 } }))
   end)
 end)
 

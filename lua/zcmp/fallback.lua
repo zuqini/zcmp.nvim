@@ -8,9 +8,9 @@
 ---
 ---Also `M.batch()`, the feed queue that puts two feeds from one key press
 ---back in call order, and `M.menu_visible()`/`M.has_selection()`, the
----menu-state predicates `needs_menu_closed()` below and `api.lua` both ask --
----here because `api.lua` already requires this module and the reverse would
----cycle.
+---menu-state predicates `needs_menu_closed()` below and the modules that ask
+---one -- `api.lua`, `lsp.lua` -- all reach: here because those already
+---require this module and the reverse would cycle.
 
 local api = vim.api
 

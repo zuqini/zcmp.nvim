@@ -228,8 +228,8 @@ end
 ---are not confined to keyword characters (`print(...)` with lua_ls's
 ---`callSnippet`, clangd's `->foo`), so the text rule would read the
 ---`print(` a user typed around one as a head to remove. They are left
----alone, told apart by the `user_data.nvim.lsp` mark `vim.lsp.completion`
----puts on each.
+---alone, told apart by `lsp.is_server_item()` -- the `user_data.nvim.lsp`
+---mark `vim.lsp.completion` puts on each, and `lsp.lua`'s own fact to know.
 ---
 ---A no-op when nothing was relocated -- the word sits at its start already --
 ---or when the word is not at the cursor at all, so it is safe on a discard
@@ -256,13 +256,13 @@ function M.trim_head(item)
       return 0
     end
   else
-    if vim.tbl_get(item, 'user_data', 'nvim', 'lsp') then
+    if require('zcmp.lsp').is_server_item(item) then
       return 0
     end
     -- Reached directly rather than through buffer.lua: a read-only query,
-    -- not the lifecycle traffic that module is the façade for. `wired` (one
-    -- of the two routes `may_relocate()` checks) indexes by real buffer
-    -- number, unlike the API's `0` shorthand.
+    -- not the lifecycle traffic that module is the façade for. `wired`, one
+    -- of the routes `may_relocate()` unions, indexes by real buffer number,
+    -- unlike the API's `0` shorthand.
     if not require('zcmp.lsp').may_relocate(vim.api.nvim_get_current_buf()) then
       return 0
     end

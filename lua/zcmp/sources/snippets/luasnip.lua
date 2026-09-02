@@ -88,23 +88,13 @@ function M.enable(opts)
   core.enable()
 end
 
----@param value string|string[]|nil
----@param separator string
----@return string?
-local function joined(value, separator)
-  if type(value) == 'table' then
-    return table.concat(value, separator)
-  end
-  return type(value) == 'string' and value or nil
-end
-
 ---LuaSnip does not constrain `dscr` or `name` to a string -- either may be a
 ---table of lines, and `name` has no fallback of its own, so it needs the
 ---same normalization `dscr` does.
 ---@param snip table
 ---@return string?
 local function description(snip)
-  return joined(snip.dscr, ' ') or joined(snip.name, ' ')
+  return core.joined(snip.dscr, ' ') or core.joined(snip.name, ' ')
 end
 
 ---Deferred: LuaSnip renders a docstring by evaluating the snippet's nodes,
@@ -117,7 +107,7 @@ local function docstring(snip)
     if not ok then
       return nil
     end
-    return type(doc) == 'table' and table.concat(doc, '\n') or doc
+    return core.joined(doc, '\n')
   end
 end
 

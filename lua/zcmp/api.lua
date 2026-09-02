@@ -322,36 +322,8 @@ function M.scroll_documentation_up(count)
   return scroll(count and (count .. '<C-y>') or '<C-u>')
 end
 
----Ask for signature help, if `signature.enabled` is set. ZCmp never asks by
----itself: the window that follows you through an argument list is core's
----|vim.lsp.buf.signature_help()|, on the key you bind it to. Declines while
----the window is already up -- through `M.` rather than a local, since
----`is_signature_visible()` is defined below this function -- so a preset
----pairing it with `hide_signature` (`['<C-k>'] = { 'show_signature',
----'hide_signature', 'fallback' }`) toggles instead of re-asking forever.
----@return boolean
-function M.show_signature()
-  if not config.options.signature.enabled then
-    return false
-  end
-  if M.is_signature_visible() then
-    return false
-  end
-  if not next(vim.lsp.get_clients({ bufnr = 0, method = 'textDocument/signatureHelp' })) then
-    return false
-  end
-  vim.lsp.buf.signature_help()
-  return true
-end
-
----@return boolean
-function M.hide_signature()
-  if not M.is_signature_visible() then
-    return false
-  end
-  return (pcall(api.nvim_win_close, vim.b.lsp_floating_preview, true))
-end
-
+---ZCmp's signature-help window, or `nil` if what is open is not one.
+---
 ---`lsp_floating_preview` is a private var set by
 ---|vim.lsp.util.open_floating_preview()|, undocumented in |lsp|; there is no
 ---public alternative today. It is set for *every* caller of that function --
@@ -363,14 +335,55 @@ end
 ---float's *window* with `opts.focus_id`, via `nvim_win_set_var`; `vim.lsp.buf`
 ---sets it to the request method, `'textDocument/hover'` for a hover float and
 ---`'textDocument/signatureHelp'` for this one, which is the one distinguishing
----mark between the two. Named here so a future core change that breaks either
----is diagnosable rather than a silent no-op.
----@return boolean
-function M.is_signature_visible()
+---mark between the two. Spelled here and nowhere else, so a future core change
+---that breaks either is one diagnosable edit rather than a silent no-op in
+---each of the three callers below.
+---@return integer?
+local function signature_win()
   local win = vim.b.lsp_floating_preview
-  return type(win) == 'number'
+  if
+    type(win) == 'number'
     and api.nvim_win_is_valid(win)
     and vim.w[win]['textDocument/signatureHelp'] ~= nil
+  then
+    return win
+  end
+  return nil
+end
+
+---Ask for signature help, if `signature.enabled` is set. ZCmp never asks by
+---itself: the window that follows you through an argument list is core's
+---|vim.lsp.buf.signature_help()|, on the key you bind it to. Declines while
+---the window is already up, so a preset pairing it with `hide_signature`
+---(`['<C-k>'] = { 'show_signature', 'hide_signature', 'fallback' }`) toggles
+---instead of re-asking forever.
+---@return boolean
+function M.show_signature()
+  if not config.options.signature.enabled then
+    return false
+  end
+  if signature_win() then
+    return false
+  end
+  if not next(vim.lsp.get_clients({ bufnr = 0, method = 'textDocument/signatureHelp' })) then
+    return false
+  end
+  vim.lsp.buf.signature_help()
+  return true
+end
+
+---@return boolean
+function M.hide_signature()
+  local win = signature_win()
+  if not win then
+    return false
+  end
+  return (pcall(api.nvim_win_close, win, true))
+end
+
+---@return boolean
+function M.is_signature_visible()
+  return signature_win() ~= nil
 end
 
 return M

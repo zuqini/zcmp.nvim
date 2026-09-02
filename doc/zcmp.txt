@@ -160,7 +160,7 @@ every keystroke, "match 1 of 9" in the message line is noise.
 
                                                               *zcmp-preselect*
 'autocomplete' forces `noselect` on, and `preselect` in 'completeopt'
-overrides it -- but only for items a source *marked* as preselected. ZCmp's
+overrides it -- but only for items a source marked as preselected. ZCmp's
 path source marks its first item, and a language server marks its own when it
 has an opinion. Core's buffer scanners mark nothing, so a buffer word is not
 under the cursor until you select it.
@@ -325,9 +325,9 @@ surgery needed. Only a module whose chunk loaded but whose `enable()` raised
 keeps its cached chunk: reload re-runs that cached `enable()` rather than
 re-reading the file -- it recovers a transient cause, such as a dependency
 that arrives after zcmp does, not a fix to the module's own source. A fix
-to *that* file needs `package.loaded['my.source'] = nil` before the next
+to that file needs `package.loaded['my.source'] = nil` before the next
 reload/setup, or a Neovim restart. The same goes for a
-*dependency* of the module whose chunk raised: reload drops only the
+dependency of the module whose chunk raised: reload drops only the
 module's own cache entry, so the dependency keeps `require()`'s sentinel --
 the error reads `loop or previous error loading module '<dep>'` -- until
 `package.loaded['<dep>'] = nil`.
@@ -525,8 +525,8 @@ Asking the server again while a menu is open. ~
 |vim.lsp.completion| will not do this by itself. Both of its entry points
 give up on |pumvisible()|: `on_insert_char_pre` returns early on it, and
 `trigger()` returns early on it unless the last answer was `isIncomplete`.
-The widened trigger list is reached only *after* that check, so widening buys
-an *opening* keystroke, never a refreshing one. The mechanism core intends
+The widened trigger list is reached only after that check, so widening buys
+an opening keystroke, never a refreshing one. The mechanism core intends
 for refreshing is `isIncomplete`, which is the server's decision: one that
 answers true (lua_ls after a `.`) is re-asked every keystroke for free, and
 one that answers false (lua_ls on a plain keyword) is asked once. While
@@ -542,9 +542,20 @@ is built or ranked here: what goes back is what was already on screen.
 
 It does nothing unless it has to. It runs only while a |complete()| session
 owns the menu -- in core's own "keyword" session 'complete' is re-scanned
-every keystroke already -- and it stands down while an item is selected, so
-|i_CTRL-N| is never interrupted. `retrigger = false` turns it off, and the
-server is asked once per menu, as core has it.
+every keystroke already -- and only on a typed key: the |InsertCharPre| a
+keystroke fires is what the ask is for, and every other way the menu can
+change -- browsing it with |i_CTRL-N| / |i_CTRL-P|, the server's own answer
+opening it, the ask's own two |complete()| calls -- has no keystroke behind
+it and is left alone. An item a source preselected and you never touched
+counts for nothing either way: you are typing past it, not choosing it. And
+a menu holding only the server's items is left to core, which refreshes one
+the server marked `isIncomplete` in place and needs no re-ask for one it
+marked complete; taking it down would leave nothing to put back.
+`retrigger = false` turns it off, and the server is asked once per menu, as
+core has it.
+
+All of it is a workaround. |vim.lsp.completion| has no way to be asked while
+a menu is open; the day it grows one, the option goes with it.
 
 ==============================================================================
 8. SNIPPETS                                                     *zcmp-snippets*

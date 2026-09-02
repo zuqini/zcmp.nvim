@@ -27,16 +27,6 @@ function M.enable(opts)
   core.enable()
 end
 
----@param value string|string[]|nil
----@param separator string
----@return string?
-local function joined(value, separator)
-  if type(value) == 'table' then
-    return table.concat(value, separator)
-  end
-  return type(value) == 'string' and value or nil
-end
-
 ---@param findstart 0|1
 ---@return integer|table
 function M.completefunc(findstart)
@@ -57,7 +47,7 @@ function M.completefunc(findstart)
   local candidates = {}
   for _, name in ipairs(names) do
     local snippet = loaded[name]
-    local body = joined(snippet.body, '\n')
+    local body = core.joined(snippet.body, '\n')
     -- VSCode-format snippets may declare several prefixes; each is its own
     -- trigger for the same body.
     local prefixes = type(snippet.prefix) == 'table' and snippet.prefix or { snippet.prefix }
@@ -65,7 +55,7 @@ function M.completefunc(findstart)
       if type(prefix) == 'string' and body then
         candidates[#candidates + 1] = {
           trigger = prefix,
-          description = joined(snippet.description, ' '),
+          description = core.joined(snippet.description, ' '),
           body = body,
         }
       end

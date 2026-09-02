@@ -8,6 +8,7 @@
 local buffer = require('zcmp.buffer')
 local config = require('zcmp.config')
 local keymap = require('zcmp.keymap')
+local lsp = require('zcmp.lsp')
 local sources = require('zcmp.sources')
 local zcmp = require('zcmp')
 
@@ -191,6 +192,20 @@ local function check_buffer(bufnr)
     vim.health.ok("'autocomplete' is on")
   else
     vim.health.info("'autocomplete' is off — the menu opens on the key bound to `show`")
+  end
+
+  -- Only where there is something to ask again: a buffer with no
+  -- completion-capable client has nothing this hook would ever reach for.
+  if lsp.available(bufnr) then
+    if lsp.retriggering(bufnr) then
+      vim.health.ok('asking the LSP source again as you type')
+    else
+      vim.health.warn('not asking the LSP source again as you type', {
+        "Either `lsp` is not in this buffer's source list, its `enabled`",
+        'predicate answered false, `sources.providers.lsp.opts.retrigger` is',
+        'false, or it has not finished attaching yet.',
+      })
+    end
   end
 
   -- 'completeopt' is global-local: check_setup() compares the global slot,

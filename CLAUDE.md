@@ -13,7 +13,15 @@ nvim -u NONE -l tests/busted.lua
 
 # Lint and type-check (also run in CI)
 luacheck lua/ tests/
-lua-language-server --check "$PWD/lua" --checklevel=Warning --configpath="$PWD/.luarc.json"
+# .luarc.json's library is "$VIMRUNTIME/lua". Unset, every vim.* type is
+# undefined and the check reports ~23 warnings that are not real. Point it at
+# a v0.12.0 install, not the newest one to hand: that is the floor the
+# annotations must hold on, and what CI resolves it from. Keep it on the
+# command rather than exported -- it would also override the runtime the nvim
+# running the suite above loads, which fails before the first test.
+VIMRUNTIME="$(/path/to/nvim-v0.12.0 --clean --headless \
+  --cmd 'lua io.write(vim.env.VIMRUNTIME)' --cmd quit)" \
+  lua-language-server --check "$PWD/lua" --checklevel=Warning --configpath="$PWD/.luarc.json"
 ```
 
 ## Architecture Overview
@@ -22,9 +30,12 @@ zcmp configures Neovim's own completion. It does not implement matching,
 ranking, menu drawing or a source protocol of its own: every source is an
 entry in 'complete', and every behaviour is an option core already has.
 
-- `init.lua` — the public API and the autocmds; every other module is an
-  implementation detail. Re-exports `api.lua` one name at a time, on purpose:
-  the surface is meant to be discoverable from `require('zcmp').`.
+- `init.lua` — the public API and the `zcmp` augroup's autocmds; every other
+  module is an implementation detail. Two other augroups exist outside it —
+  `lsp.lua`'s retrigger hook (`zcmp.lsp`) and the snippet core's accept and
+  `InsertLeave` pair (`zcmp.snippets`) — see those modules' own entries for
+  why. Re-exports `api.lua` one name at a time, on purpose: the surface is
+  meant to be discoverable from `require('zcmp').`.
 - `config.lua` — resolved `setup()` options. Usable before `setup()` runs.
   Validates against two shape tables — one mirrors the defaults, the other is
   keyed on the module a shipped provider reaches — and merges with two rules
@@ -41,9 +52,10 @@ entry in 'complete', and every behaviour is an option core already has.
   session. All three are buffer-local, which is what makes them reaped
   together; whichever runs first deletes the other two.
 - `keymap.lua` — presets, dispatch, and installing/removing the buffer-local
-  mappings. Also `check()`, the static validation `setup()` runs — an
-  unknown preset, a command after a terminal one, a predicate named as a
-  command, two spellings of one key — which is why `config.lua` reaches into
+  mappings. Also `check()`, every static check of the `setup()` keymap table
+  that can be made without a buffer — an unknown preset, two spellings of
+  one key, a name that is no command at all, a predicate named as a command,
+  a command after a terminal one — which is why `config.lua` reaches into
   this module.
 - `fallback.lua` — capturing a key's mapping before zcmp takes it, running
   it, and restoring it on `disable()`. The only reason zcmp does not need to
@@ -54,9 +66,10 @@ entry in 'complete', and every behaviour is an option core already has.
   feeds from one press back in call order, and each entry records
   `ends_completion` for `needs_menu_closed()` to ask. And
   `menu_visible()`/`has_selection()`, the menu-state predicates — here
-  because `needs_menu_closed()` needs them and `api.lua` already requires
-  `fallback`, so this is the one home both callers reach; `has_selection()`
-  is the load-bearing rule behind the `<CR>`/preselect decision.
+  because `needs_menu_closed()` needs them and `api.lua`, the other module
+  that asks one, already requires `fallback`, so this is the one home every
+  caller reaches; `has_selection()` is the load-bearing rule behind the
+  `<CR>`/preselect decision.
 - `buffer.lua` — which buffers zcmp drives, and the single writer of every
   option it touches: 'complete' and 'autocomplete' per buffer, 'completeopt',
   'autocompletedelay' and 'shortmess' globally. Every pass derives the whole
@@ -73,9 +86,9 @@ entry in 'complete', and every behaviour is an option core already has.
   consumer side of that key, which zcmp calls at `CompleteDone` and a module
   calls first if its own handler reads the word's position. Its text-derived
   branch asks `lsp.may_relocate()` whether the restart could have run here at
-  all — the one edge into `lsp.lua` that does not go through `buffer.lua`,
-  because it is a read-only query rather than the lifecycle traffic that
-  façade owns.
+  all — directly rather than through `buffer.lua`, on the same read-only
+  terms other modules reach it on: a read-only query, not the lifecycle
+  traffic that façade owns.
 - `sources/path.lua` — the path source. Only what `getcompletion()` cannot
   do: deciding where a path token starts, and resolving a relative one
   against the buffer's directory.
@@ -87,10 +100,30 @@ entry in 'complete', and every behaviour is an option core already has.
   `nvim_snippets.lua` are adapters over it, one enumeration loop each.
 - `lsp.lua` — trigger-character widening and `vim.lsp.completion`, and the
   `lsp` provider's module (`source()`, `Fv:lua.vim.lsp.omnifunc`). Both
-  delivery paths are deliberate; the header says why.
+  delivery paths are deliberate; the header says why. Also the retrigger
+  machinery: a `TextChangedP` hook, one per buffer regardless of how many
+  clients hold it, asking the server again while a menu core already built is
+  still on screen — the one thing neither delivery path above does by
+  itself, since both refuse while `pumvisible()`. The ask is for a typed key
+  and nothing else: an `InsertCharPre` raises a per-buffer flag, and
+  whichever change event the character lands as consumes it — `TextChangedP`
+  with a menu up, where the hook asks, or `TextChangedI` with none, where
+  core opens the next menu itself. Every other `TextChangedP` — browsing the
+  menu, a server's answer opening one, the hook's own two `complete()` calls
+  — finds the flag down, so nothing is compared against an earlier event and
+  nothing is read off the selected item. A menu holding only the server's
+  items is left to core, which refreshes an `isIncomplete` one in place; and
+  `InsertLeave` drops a flag a swallowed keystroke left up.
+  They are all installed in its own `zcmp.lsp` augroup, created once and never
+  cleared wholesale; a buffer's autocmds go only when `M.forget()` empties its
+  last client out of `wired`, so
+  `zcmp.disable()`'s `nvim_del_augroup_by_name('zcmp')` — a different group
+  — never has to reach them.
 - `appearance.lua` — the one highlight zcmp sets.
 - `commands.lua` — the `:ZCmp` user command.
-- `health.lua` — `:checkhealth zcmp` diagnostics.
+- `health.lua` — `:checkhealth zcmp` diagnostics. Reads `lsp.lua` directly
+  (`available()`, `retriggering()`) on the same read-only terms as
+  `sources/init.lua`.
 
 ## Conventions & Patterns
 
